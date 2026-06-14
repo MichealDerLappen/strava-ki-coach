@@ -16,17 +16,20 @@ from datetime import datetime, date, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlencode, urlparse, parse_qs
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import requests
 from dotenv import load_dotenv, set_key
+
+try:
+    import plotly.graph_objects as go
+except ImportError:
+    os.system("pip install plotly")
+    import plotly.graph_objects as go
 
 from google_drive import upload_file
 
 ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 ACTIVITIES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "activities.json")
-FORMKURVE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "formkurve.png")
+FORMKURVE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "formkurve.html")
 DRIVE_FILENAME = "activities.json"
 
 # Banister-Modell: Grundlagen fuer die Formkurven-Berechnung
@@ -340,29 +343,73 @@ def print_form_summary(history):
 
 
 def plot_formkurve(history):
-    """Erstellt eine Grafik der Formkurve (CTL, ATL, TSB) als 'formkurve.png'."""
+    """Erstellt ein interaktives Dashboard der Formkurve (CTL, ATL, TSB)
+    als 'formkurve.html'."""
 
     if not history:
         return
 
-    dates = [datetime.fromisoformat(h["date"]) for h in history]
+    dates = [h["date"] for h in history]
     ctl = [h["ctl"] for h in history]
     atl = [h["atl"] for h in history]
     tsb = [h["tsb"] for h in history]
+    tsb_pos = [v if v >= 0 else 0 for v in tsb]
+    tsb_neg = [v if v < 0 else 0 for v in tsb]
 
-    plt.figure(figsize=(10, 5))
-    plt.plot(dates, ctl, label="Fitness (CTL)", color="tab:blue", linewidth=2)
-    plt.plot(dates, atl, label="Ermuedung (ATL)", color="tab:orange", linewidth=2)
-    plt.plot(dates, tsb, label="Form (TSB)", color="tab:green", linewidth=2)
-    plt.axhline(0, color="grey", linewidth=0.5, linestyle="--")
+    fig = go.Figure()
 
-    plt.title("Formkurve (Banister-Modell)")
-    plt.xlabel("Datum")
-    plt.ylabel("Trainingsstress")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(FORMKURVE_PATH, dpi=150)
-    plt.close()
+    fig.add_trace(go.Scatter(
+        x=dates, y=tsb_pos,
+        name="Form (TSB) positiv",
+        mode="lines",
+        line=dict(color="rgba(0,0,0,0)"),
+        fill="tozeroy",
+        fillcolor="rgba(46, 204, 113, 0.25)",
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+    fig.add_trace(go.Scatter(
+        x=dates, y=tsb_neg,
+        name="Form (TSB) negativ",
+        mode="lines",
+        line=dict(color="rgba(0,0,0,0)"),
+        fill="tozeroy",
+        fillcolor="rgba(231, 76, 60, 0.25)",
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=dates, y=ctl,
+        name="Fitness (CTL)",
+        mode="lines",
+        line=dict(color="#2ecc71", width=3),
+    ))
+    fig.add_trace(go.Scatter(
+        x=dates, y=atl,
+        name="Ermuedung (ATL)",
+        mode="lines",
+        line=dict(color="#e74c3c", width=1.5),
+    ))
+    fig.add_trace(go.Scatter(
+        x=dates, y=tsb,
+        name="Form (TSB)",
+        mode="lines",
+        line=dict(color="#f1c40f", width=2.5),
+    ))
+
+    fig.add_hline(y=0, line_width=1, line_dash="dash", line_color="grey")
+
+    fig.update_layout(
+        title="Formkurve (Banister-Modell)",
+        template="plotly_dark",
+        hovermode="x unified",
+        xaxis_title="Datum",
+        yaxis_title="Trainingsstress",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+
+    fig.write_html(FORMKURVE_PATH)
     print(f"Formkurve gespeichert unter {FORMKURVE_PATH}")
 
 
