@@ -84,7 +84,13 @@ Formkurve (2026-06-14): Fitness (CTL): 25.0 | Ermuedung (ATL): 28.6 | Form (TSB)
 
 Aus der Formkurve wird ein interaktives Dark-Mode-Dashboard als
 `formkurve.html` generiert (Plotly, bei Bedarf automatisch via `pip`
-installiert) und nach Google Drive synchronisiert. Enthalten sind:
+installiert) und nach Google Drive synchronisiert. CSS und JavaScript des
+Dashboards liegen als eigene Dateien unter `templates/dashboard.css` und
+`templates/dashboard.js` und werden beim Generieren mit den aktuellen
+CTL-/ATL-/ACWR-Werten, der Wettervorhersage, dem ORS-API-Key und der
+Empfehlungs-Farbe befüllt und in `formkurve.html` eingebettet, sodass die
+Datei weiterhin als einzelne, eigenständige Datei nach Google Drive
+hochgeladen werden kann. Enthalten sind:
 
 - **Optimales Trainingsfenster**: hervorgehobene Box ganz oben, die anhand
   der heutigen CTL/ATL-Werte berechnet, an welchem der nächsten 14 Tage der
