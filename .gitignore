@@ -3,4 +3,7 @@ venv/
 __pycache__/
 *.pyc
 activities.json
+formkurve.png
 .DS_Store
+credentials.json
+drive_token.json
