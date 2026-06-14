@@ -37,11 +37,76 @@ Anschließend lädt das Skript neue Aktivitäten von Strava herunter:
 - Existiert die Datei bereits, werden nur Aktivitäten geladen, die neuer als
   die zuletzt gespeicherte (`start_date`) sind, und an die Liste angehängt.
 
+## Komplette Historie herunterladen
+
+```bash
+python fetch_history.py
+```
+
+Einmaliges Skript, das die Strava-Tokens aus `strava_auth.py` wiederverwendet
+und die **komplette** Aktivitätshistorie zeitlich rückwärts abruft (seitenweise
+mit `per_page=200`, 1 Sekunde Pause zwischen den Anfragen, um das Strava
+Rate-Limit nicht zu verletzen). Das Ergebnis wird in `activities.json`
+gespeichert und nach Google Drive hochgeladen.
+
+## Trainingsanalyse & Formkurve (Banister-Modell)
+
+Bei jedem Lauf von `strava_auth.py` wird zusätzlich eine
+Trainings-Formkurve nach dem Banister-Modell berechnet:
+
+- **TSS pro Aktivität**: Für Radfahrten aus `weighted_average_watts`
+  (Normalized Power) und der eingestellten FTP (266 W) nach der Formel
+  `TSS = (Dauer_s * NP * IF) / (FTP * 3600) * 100` mit `IF = NP / FTP`.
+  Für Aktivitäten ohne Leistungsdaten (Laufen, Wandern, Krafttraining, ...)
+  wird der TSS aus Stravas `suffer_score` (`* 0.6`) oder, falls nicht
+  vorhanden, grob aus der durchschnittlichen Herzfrequenz im Verhältnis zur
+  angenommenen Laktatschwelle (172 bpm) geschätzt. Der Wert wird je
+  Aktivität als `tss`-Feld in `activities.json` gespeichert.
+- **CTL (Fitness)**: exponentiell gewichteter gleitender Durchschnitt des
+  täglichen TSS über 42 Tage.
+- **ATL (Ermüdung)**: exponentiell gewichteter gleitender Durchschnitt des
+  täglichen TSS über 7 Tage.
+- **TSB (Form)**: `CTL - ATL`, täglich fortlaufend von der ersten
+  Aktivität bis heute berechnet.
+
+Die heutigen Werte werden farbig im Terminal ausgegeben, z. B.:
+
+```
+Formkurve (2026-06-14): Fitness (CTL): 25.0 | Ermuedung (ATL): 28.6 | Form (TSB): -7.8
+```
+
+### Interaktives Dashboard `formkurve.html`
+
+Aus der Formkurve wird ein interaktives Dark-Mode-Dashboard als
+`formkurve.html` generiert (Plotly, bei Bedarf automatisch via `pip`
+installiert) und nach Google Drive synchronisiert. Enthalten sind:
+
+- **Optimales Trainingsfenster**: hervorgehobene Box ganz oben, die anhand
+  der heutigen CTL/ATL-Werte berechnet, an welchem der nächsten 14 Tage der
+  TSB wieder ≥ 0 ist (bzw. die Sondermeldung "🔥 Du bist absolut frisch!",
+  falls das bereits heute der Fall ist).
+- **Formkurven-Chart**: Liniendiagramm mit CTL (grün), ATL (rot) und TSB
+  (gelb, mit grün/rot gefüllter Fläche zur Nulllinie für positive/negative
+  Form), `hovermode="x unified"` für eine kombinierte Hover-Anzeige.
+- **Zeitleiste der Aktivitäten**: feine Striche am unteren Rand des Charts,
+  ein Hover zeigt Name, Sportart und Distanz (km) der jeweiligen Aktivität.
+- **Zoom & Navigation**: Range Slider unter dem Chart sowie
+  Schnellauswahl-Buttons ("1M", "3M", "YTD", "Alles").
+- **Coach-Analyse**: große Boxen mit den heutigen CTL-/ATL-/TSB-Werten,
+  automatisch generierte Status- (Frische-/Aufbau-/Ermüdungszone) und
+  Trendtexte (Fitness steigend/sinkend), sowie Hover-Tooltips mit
+  sportwissenschaftlichen Erklärungen zu CTL, ATL und TSB.
+- **Zukunfts-Simulator**: Slider für geplante Dauer (0–360 min) und
+  Leistung (100–400 W) sowie ein Dropdown für den geplanten Trainingstag
+  (heute bis in 7 Tagen). Live berechnet werden der simulierte TSS, der
+  Tiefpunkt des TSB in den nächsten 7 Tagen und der Tag, an dem die Form
+  wieder positiv wird.
+
 ## Google Drive Upload
 
-Nach der Synchronisation wird `activities.json` automatisch nach Google
-Drive hochgeladen (eine dort bereits vorhandene Datei mit demselben Namen
-wird überschrieben).
+Nach der Synchronisation werden `activities.json` und `formkurve.html`
+automatisch nach Google Drive hochgeladen (dort bereits vorhandene Dateien
+mit demselben Namen werden überschrieben).
 
 Voraussetzung dafür:
 
