@@ -451,6 +451,24 @@ def plot_formkurve(history):
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         paper_bgcolor="#111418",
         plot_bgcolor="#111418",
+        margin=dict(t=120),
+    )
+
+    fig.update_xaxes(
+        rangeslider=dict(visible=True, bgcolor="#1c2128", bordercolor="#2d333b", borderwidth=1),
+        rangeselector=dict(
+            bgcolor="#1c2128",
+            activecolor="#3498db",
+            bordercolor="#2d333b",
+            borderwidth=1,
+            font=dict(color="#e6e6e6"),
+            buttons=[
+                dict(count=1, label="1M", step="month", stepmode="backward"),
+                dict(count=3, label="3M", step="month", stepmode="backward"),
+                dict(count=1, label="YTD", step="year", stepmode="todate"),
+                dict(label="Alles", step="all"),
+            ],
+        ),
     )
 
     analysis = analyze_form(history)
@@ -491,6 +509,8 @@ def plot_formkurve(history):
         padding: 20px 32px;
         text-align: center;
         min-width: 150px;
+        position: relative;
+        cursor: help;
     }}
     .metric-box .label {{
         font-size: 14px;
@@ -500,6 +520,32 @@ def plot_formkurve(history):
     .metric-box .value {{
         font-size: 32px;
         font-weight: 700;
+    }}
+    .tooltip-text {{
+        visibility: hidden;
+        opacity: 0;
+        position: absolute;
+        bottom: 105%;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 260px;
+        background-color: #222222;
+        color: #f5f5f5;
+        border: 1px solid #444444;
+        border-radius: 8px;
+        padding: 10px 14px;
+        font-size: 13px;
+        font-weight: 400;
+        line-height: 1.5;
+        text-align: left;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+        transition: opacity 0.2s ease-in-out;
+        pointer-events: none;
+        z-index: 20;
+    }}
+    .metric-box:hover .tooltip-text {{
+        visibility: visible;
+        opacity: 1;
     }}
     .ctl {{ color: #2ecc71; }}
     .atl {{ color: #e74c3c; }}
@@ -589,14 +635,17 @@ def plot_formkurve(history):
         <div class="metric-box">
             <div class="label">Fitness (CTL)</div>
             <div class="value ctl">{analysis['ctl']}</div>
+            <div class="tooltip-text">Chronic Training Load (Fitness): Spiegelt deine langfristige Trainingsbelastung der letzten 42 Tage wider. Ein höherer Wert bedeutet ein stärkeres Ausdauer-Fundament.</div>
         </div>
         <div class="metric-box">
             <div class="label">Ermuedung (ATL)</div>
             <div class="value atl">{analysis['atl']}</div>
+            <div class="tooltip-text">Acute Training Load (Ermüdung): Bildet den kurzfristigen Stress deiner Trainingseinheiten der letzten 7 Tage ab. Steigt nach harten Einheiten schnell an und sinkt bei Pause ebenso schnell.</div>
         </div>
         <div class="metric-box">
             <div class="label">Form (TSB)</div>
             <div class="value tsb">{analysis['tsb']}</div>
+            <div class="tooltip-text">Training Stress Balance (Form / Frische): Berechnet aus CTL minus ATL. Ein leicht negativer bis ausgeglichener Wert zeigt optimalen Trainingsreiz. Ein positiver Wert bedeutet hohe Frische und Rennform.</div>
         </div>
     </div>
     <p class="status-text">{analysis['form_status']}</p>
