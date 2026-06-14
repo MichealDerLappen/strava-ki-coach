@@ -357,6 +357,7 @@ def analyze_form(history):
     ctl_today = today["ctl"]
     atl_today = today["atl"]
     tsb_today = today["tsb"]
+    acwr_today = round(atl_today / ctl_today, 2) if ctl_today else 0.0
 
     if tsb_today > 5:
         form_status = (
@@ -387,6 +388,7 @@ def analyze_form(history):
         "ctl": ctl_today,
         "atl": atl_today,
         "tsb": tsb_today,
+        "acwr": acwr_today,
         "form_status": form_status,
         "trend_status": trend_status,
     }
@@ -394,10 +396,42 @@ def analyze_form(history):
 
 def recommend_training(history):
     """Ermittelt eine konkrete Trainings-Empfehlung basierend auf dem
-    heutigen TSB-Wert und dem Wochentag."""
+    heutigen TSB-Wert, dem akuten Belastungsverhaeltnis (ACWR) und dem
+    Wochentag."""
 
-    tsb_today = history[-1]["tsb"]
+    today = history[-1]
+    tsb_today = today["tsb"]
+    ctl_today = today["ctl"]
+    atl_today = today["atl"]
+    acwr_today = round(atl_today / ctl_today, 2) if ctl_today else 0.0
     weekday = date.today().weekday()  # Montag=0 ... Sonntag=6
+
+    # ACWR-Ueberlastungs-Warnung hat oberste Prioritaet, unabhaengig vom TSB.
+    if acwr_today > 1.5:
+        return {
+            "title": f"⚠️ Überlastungs-Warnung (ACWR: {acwr_today})",
+            "text": (
+                "Du hast dein Trainingsvolumen in den letzten 7 Tagen zu "
+                "drastisch im Vergleich zu deiner Langzeitbasis gesteigert. "
+                "Das Risiko für Knie- oder Sehnenprobleme ist aktuell stark "
+                "erhöht. Schalte dringend einen Gang zurück!"
+            ),
+            "color": "#e74c3c",
+            "acwr": acwr_today,
+        }
+
+    # Sweet Spot: kontrollierter Belastungsanstieg bei ausgeglichener Form.
+    if 0.8 <= acwr_today <= 1.3 and -10 <= tsb_today <= 10:
+        return {
+            "title": f"🎯 Perfekter Trainingsreiz (ACWR: {acwr_today})",
+            "text": (
+                "Du befindest dich sportwissenschaftlich im absoluten "
+                "'Sweet Spot'. Deine Formkurve steigt kontrolliert und "
+                "hocheffektiv an. Weiter so!"
+            ),
+            "color": "#2ecc71",
+            "acwr": acwr_today,
+        }
 
     if tsb_today > 10:
         return {
@@ -408,6 +442,7 @@ def recommend_training(history):
                 "FTP-Test oder eine neue Bestzeit auf deinem Lieblings-Segment!"
             ),
             "color": "#3498db",
+            "acwr": acwr_today,
         }
 
     if tsb_today >= -10:
@@ -421,6 +456,7 @@ def recommend_training(history):
                     "Canyon. Achte darauf, an Hügeln nicht zu überziehen."
                 ),
                 "color": "#f1c40f",
+                "acwr": acwr_today,
             }
         return {
             "title": "🏃‍♂️ Kontrollierter Formaufbau (Tempo / Kraftausdauer)",
@@ -431,6 +467,7 @@ def recommend_training(history):
                 "Trainingsreiz hochzuhalten."
             ),
             "color": "#f1c40f",
+            "acwr": acwr_today,
         }
 
     if tsb_today >= -20:
@@ -443,6 +480,7 @@ def recommend_training(history):
                 "entspannter Spaziergang. Bloß kein Stress heute!"
             ),
             "color": "#e67e22",
+            "acwr": acwr_today,
         }
 
     return {
@@ -454,6 +492,7 @@ def recommend_training(history):
             "8 Stunden Schlaf!"
         ),
         "color": "#e74c3c",
+        "acwr": acwr_today,
     }
 
 
@@ -611,6 +650,7 @@ def plot_formkurve(history, activities, weather_forecast=None):
         paper_bgcolor="#111418",
         plot_bgcolor="#111418",
         margin=dict(t=120),
+        height=700,
     )
 
     fig.update_xaxes(
@@ -681,12 +721,6 @@ def plot_formkurve(history, activities, weather_forecast=None):
             <div class="day-card-header">
                 <span>{label}</span>{weather_html}
             </div>
-            <div class="map" id="map{day}"></div>
-            <div class="route-info">
-                <div class="route-target" id="routeTargetValue{day}"></div>
-                <div class="route-distance">Geschaetzte Distanz: <span id="distanceValue{day}">0.0 km</span></div>
-                <div class="route-waypoints">Moegliche Wendepunkte: <span id="waypointsValue{day}">-</span></div>
-            </div>
             <div class="compact-slider">
                 <label>Dauer (min)</label>
                 <div class="slider-row">
@@ -702,8 +736,17 @@ def plot_formkurve(history, activities, weather_forecast=None):
                 </div>
             </div>
             <div class="day-tss">TSS: <span id="tssValue{day}">0.0</span></div>{warnings_html}
-            <button class="route-btn" id="routeBtn{day}" onclick="loadRealRoute({day})">🗺️ Echte Route laden</button>
-            <div class="route-elevation">Echte Hoehenmeter: <span id="elevationValue{day}">-</span></div>
+            <details class="route-planner" data-day="{day}">
+                <summary>🗺️ Routen-Planer</summary>
+                <div class="map" id="map{day}"></div>
+                <div class="route-info">
+                    <div class="route-target" id="routeTargetValue{day}"></div>
+                    <div class="route-distance">Geschaetzte Distanz: <span id="distanceValue{day}">0.0 km</span></div>
+                    <div class="route-waypoints">Moegliche Wendepunkte: <span id="waypointsValue{day}">-</span></div>
+                </div>
+                <button class="route-btn" id="routeBtn{day}" onclick="loadRealRoute({day})">🗺️ Echte Route laden</button>
+                <div class="route-elevation">Echte Hoehenmeter: <span id="elevationValue{day}">-</span></div>
+            </details>
         </div>""")
     day_cards_html = "\n".join(day_cards)
     chart_html = fig.to_html(full_html=False, include_plotlyjs="cdn", div_id="formkurve-chart")
@@ -786,6 +829,14 @@ def plot_formkurve(history, activities, weather_forecast=None):
     .ctl {{ color: #2ecc71; }}
     .atl {{ color: #e74c3c; }}
     .tsb {{ color: #f1c40f; }}
+    .acwr {{ color: #9b59b6; }}
+    .metric-box-small {{
+        min-width: 110px;
+        padding: 20px 24px;
+    }}
+    .metric-box-small .value {{
+        font-size: 24px;
+    }}
     .status-text {{
         font-size: 18px;
         line-height: 1.6;
@@ -925,6 +976,36 @@ def plot_formkurve(history, activities, weather_forecast=None):
         font-size: 15px;
         margin-bottom: 10px;
         color: #e6e6e6;
+    }}
+    .route-planner {{
+        margin-top: 14px;
+        border-top: 1px solid #2d333b;
+        padding-top: 10px;
+    }}
+    .route-planner summary {{
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 600;
+        color: #9aa4af;
+        list-style: none;
+    }}
+    .route-planner summary::-webkit-details-marker {{
+        display: none;
+    }}
+    .route-planner summary::after {{
+        content: "▾";
+        float: right;
+        transition: transform 0.15s ease;
+    }}
+    .route-planner[open] summary::after {{
+        transform: rotate(180deg);
+    }}
+    .route-planner summary:hover {{
+        color: #e6e6e6;
+    }}
+    .route-planner[open] summary {{
+        color: #e6e6e6;
+        margin-bottom: 10px;
     }}
     .map {{
         height: 180px;
@@ -1101,6 +1182,10 @@ def plot_formkurve(history, activities, weather_forecast=None):
         padding: 20px 28px;
         margin-bottom: 24px;
     }}
+    .recommendation-box.acwr-warning {{
+        background-color: #2e1414;
+        border-color: #e74c3c;
+    }}
     .recommendation-box h3 {{
         margin: 0 0 10px 0;
         font-size: 20px;
@@ -1116,7 +1201,7 @@ def plot_formkurve(history, activities, weather_forecast=None):
 </head>
 <body>
     <div class="highlight-box" id="optimalWindowBox">Berechne optimales Trainingsfenster ...</div>
-    <div class="recommendation-box">
+    <div class="recommendation-box{' acwr-warning' if recommendation['acwr'] > 1.5 else ''}">
         <h3>Coach-Empfehlung für deine nächste Einheit</h3>
         <p><strong>{recommendation['title']}</strong></p>
         <p>{recommendation['text']}</p>
@@ -1139,6 +1224,11 @@ def plot_formkurve(history, activities, weather_forecast=None):
             <div class="label">Form (TSB)</div>
             <div class="value tsb">{analysis['tsb']}</div>
             <div class="tooltip-text">Training Stress Balance (Form / Frische): Berechnet aus CTL minus ATL. Ein leicht negativer bis ausgeglichener Wert zeigt optimalen Trainingsreiz. Ein positiver Wert bedeutet hohe Frische und Rennform.</div>
+        </div>
+        <div class="metric-box metric-box-small">
+            <div class="label">ACWR</div>
+            <div class="value acwr">{analysis['acwr']}</div>
+            <div class="tooltip-text">Acute:Chronic Workload Ratio (ACWR): Verhältnis von ATL (akute Belastung, 7 Tage) zu CTL (chronische Basis, 42 Tage). Werte zwischen 0,8 und 1,3 gelten als optimaler "Sweet Spot". Werte über 1,5 deuten auf eine zu schnelle Belastungssteigerung und erhöhtes Verletzungsrisiko hin.</div>
         </div>
     </div>
     <p class="status-text">{analysis['form_status']}</p>
@@ -1228,7 +1318,14 @@ def plot_formkurve(history, activities, weather_forecast=None):
         const routeLoading = {{}};
         const routeReloadTimers = {{}};
 
-        for (let day = 1; day <= 7; day++) {{
+        // Die Karten werden erst beim ersten Aufklappen des Routen-Planer-
+        // Accordions erzeugt, da Leaflet eine sichtbare Container-Groesse
+        // benoetigt, um sich korrekt zu initialisieren.
+        function initRouteMap(day) {{
+            if (routeMaps[day]) {{
+                return routeMaps[day];
+            }}
+
             const map = L.map("map" + day, {{
                 zoomControl: false,
                 attributionControl: false,
@@ -1254,7 +1351,32 @@ def plot_formkurve(history, activities, weather_forecast=None):
 
             routeMaps[day] = map;
             routeCircles[day] = circle;
+
+            const minutes = parseInt(document.querySelector(`.day-duration[data-day="${{day}}"]`).value, 10);
+            const watts = parseInt(document.querySelector(`.day-power[data-day="${{day}}"]`).value, 10);
+            const radiusKm = estimateRouteDistance(minutes, watts) / 2;
+            circle.setRadius(Math.max(radiusKm * 1000, 1));
+            map.fitBounds(circle.getBounds());
+
+            return map;
         }}
+
+        document.querySelectorAll(".route-planner").forEach(details => {{
+            details.addEventListener("toggle", () => {{
+                if (!details.open) {{
+                    return;
+                }}
+                const day = details.dataset.day;
+                const map = initRouteMap(day);
+                map.invalidateSize();
+                const circle = routeCircles[day];
+                if (circle) {{
+                    map.fitBounds(circle.getBounds());
+                }} else if (routeLayers[day]) {{
+                    map.fitBounds(routeLayers[day].getBounds());
+                }}
+            }});
+        }});
 
         function estimateRouteDistance(minutes, watts) {{
             const speedKmh = 22 + (watts / FTP) * 11;
@@ -1351,7 +1473,7 @@ def plot_formkurve(history, activities, weather_forecast=None):
                 const ascent = properties.ascent ?? properties.summary.ascent;
                 elevationEl.textContent = Math.round(ascent) + " hm";
 
-                const map = routeMaps[day];
+                const map = initRouteMap(day);
                 if (routeCircles[day]) {{
                     map.removeLayer(routeCircles[day]);
                     routeCircles[day] = null;

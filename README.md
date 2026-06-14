@@ -90,17 +90,27 @@ installiert) und nach Google Drive synchronisiert. Enthalten sind:
   der heutigen CTL/ATL-Werte berechnet, an welchem der nächsten 14 Tage der
   TSB wieder ≥ 0 ist (bzw. die Sondermeldung "🔥 Du bist absolut frisch!",
   falls das bereits heute der Fall ist).
-- **Formkurven-Chart**: Liniendiagramm mit CTL (grün), ATL (rot) und TSB
-  (gelb, mit grün/rot gefüllter Fläche zur Nulllinie für positive/negative
-  Form), `hovermode="x unified"` für eine kombinierte Hover-Anzeige.
+- **Formkurven-Chart**: Liniendiagramm (Höhe 700px) mit CTL (grün), ATL (rot)
+  und TSB (gelb, mit grün/rot gefüllter Fläche zur Nulllinie für
+  positive/negative Form), `hovermode="x unified"` für eine kombinierte
+  Hover-Anzeige.
 - **Zeitleiste der Aktivitäten**: feine Striche am unteren Rand des Charts,
   ein Hover zeigt Name, Sportart und Distanz (km) der jeweiligen Aktivität.
 - **Zoom & Navigation**: Range Slider unter dem Chart sowie
   Schnellauswahl-Buttons ("1M", "3M", "YTD", "Alles").
-- **Coach-Analyse**: große Boxen mit den heutigen CTL-/ATL-/TSB-Werten,
-  automatisch generierte Status- (Frische-/Aufbau-/Ermüdungszone) und
-  Trendtexte (Fitness steigend/sinkend), sowie Hover-Tooltips mit
-  sportwissenschaftlichen Erklärungen zu CTL, ATL und TSB.
+- **Coach-Analyse**: große Boxen mit den heutigen CTL-/ATL-/TSB-Werten sowie
+  dem ACWR (Acute:Chronic Workload Ratio, `ATL / CTL`, gerundet auf zwei
+  Nachkommastellen), automatisch generierte Status- (Frische-/Aufbau-/
+  Ermüdungszone) und Trendtexte (Fitness steigend/sinkend), sowie
+  Hover-Tooltips mit sportwissenschaftlichen Erklärungen zu CTL, ATL, TSB und
+  ACWR.
+- **Coach-Empfehlung mit ACWR-Überlastungsschutz**: Die Empfehlungs-Box ganz
+  oben berücksichtigt neben dem TSB jetzt auch das ACWR. Steigt das ACWR über
+  1,5, erscheint unabhängig vom TSB die Warnung "⚠️ Überlastungs-Warnung
+  (ACWR: X.XX)" mit dringender Empfehlung, das Training zu reduzieren, und
+  die Box färbt sich alarmierend rot. Liegt das ACWR zwischen 0,8 und 1,3 und
+  ist der TSB ausgeglichen (-10 bis 10), erscheint stattdessen das Lob
+  "🎯 Perfekter Trainingsreiz (ACWR: X.XX)".
 - **Wochenplanung (Zukunfts-Simulator)**: Für jeden der nächsten 7 Tage gibt
   es eine eigene Karte mit zwei Slidern für geplante Dauer (0–360 min,
   Schrittweite 5) und Leistung (100–400 W, Schrittweite 5). Bei jeder
@@ -131,11 +141,14 @@ installiert) und nach Google Drive synchronisiert. Enthalten sind:
   übersichtlicher zu halten. Die Werte ausgeblendeter Tage fließen
   weiterhin in die Formkurven-Prognose ein.
 - **Routen-Planer mit echten Strecken & Höhenmetern**: Jede Tages-Karte
-  enthält eine kleine Leaflet-Karte (Dark-Mode-Tiles), zentriert auf den
-  Linzer Hauptplatz, mit einem Kreis, dessen Radius live aus Dauer und
-  Leistung geschätzt wird (`Geschwindigkeit = 22 + (Watt / FTP) * 11`,
+  enthält ein einklappbares "🗺️ Routen-Planer"-Accordion (standardmäßig
+  geschlossen, um die Ansicht aufzuräumen). Darin liegt eine kleine
+  Leaflet-Karte (Dark-Mode-Tiles), zentriert auf den Linzer Hauptplatz, mit
+  einem Kreis, dessen Radius live aus Dauer und Leistung geschätzt wird
+  (`Geschwindigkeit = 22 + (Watt / FTP) * 11`,
   `Distanz = Dauer/60 * Geschwindigkeit`, Wendepunkt-Radius = Distanz / 2).
-  Anhand des Radius werden passende reale Orte im Umland von Linz als
+  Die Karte wird erst beim ersten Aufklappen initialisiert. Anhand des
+  Radius werden passende reale Orte im Umland von Linz als
   Wendepunkt-Vorschläge angezeigt. Über den Button "🗺️ Echte Route laden"
   wird (sofern `ORS_API_KEY` in `.env` gesetzt ist) eine echte Strecke samt
   Höhenprofil von [OpenRouteService](https://openrouteservice.org/) geladen,
