@@ -32,6 +32,11 @@ ACTIVITIES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "acti
 FORMKURVE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "formkurve.html")
 DRIVE_FILENAME = "activities.json"
 
+# Open-Meteo: Koordinaten fuer die Wettervorhersage (Linz)
+WEATHER_LATITUDE = 48.3064
+WEATHER_LONGITUDE = 14.2858
+WEATHER_API_URL = "https://api.open-meteo.com/v1/forecast"
+
 # Banister-Modell: Grundlagen fuer die Formkurven-Berechnung
 FTP = 266  # Functional Threshold Power in Watt
 LTHR = 172  # angenommene Laktatschwelle (Herzfrequenz in bpm)
@@ -46,6 +51,9 @@ SCOPE = "activity:read_all"
 PAGE_SIZE = 200
 
 load_dotenv(ENV_PATH)
+
+# OpenRouteService: API-Key fuer echte Routen- und Hoehenmeter-Berechnung
+ORS_API_KEY = os.getenv("ORS_API_KEY", "")
 
 CLIENT_ID = os.environ.get("STRAVA_CLIENT_ID")
 CLIENT_SECRET = os.environ.get("STRAVA_CLIENT_SECRET")
@@ -449,12 +457,48 @@ def recommend_training(history):
     }
 
 
-def plot_formkurve(history, activities):
+def fetch_weather_forecast():
+    """Laedt die 7-Tage-Wettervorhersage fuer Linz von Open-Meteo (kein API-Key
+    notwendig). Liefert pro Tag temp_max (°C), precip_prob (%) und
+    wind_speed (km/h). Bei Netzwerkfehlern wird eine leere Liste
+    zurueckgegeben, damit das Skript auch offline durchlaeuft."""
+
+    params = {
+        "latitude": WEATHER_LATITUDE,
+        "longitude": WEATHER_LONGITUDE,
+        "daily": "temperature_2m_max,precipitation_probability_max,wind_speed_10m_max",
+        "timezone": "Europe/Berlin",
+        "forecast_days": 8,
+    }
+
+    try:
+        response = requests.get(WEATHER_API_URL, params=params, timeout=10)
+        response.raise_for_status()
+        daily = response.json()["daily"]
+
+        forecast = []
+        for i in range(1, 8):
+            forecast.append({
+                "date": daily["time"][i],
+                "temp_max": daily["temperature_2m_max"][i],
+                "precip_prob": daily["precipitation_probability_max"][i],
+                "wind_speed": daily["wind_speed_10m_max"][i],
+            })
+        return forecast
+    except Exception as exc:
+        print(f"Wettervorhersage konnte nicht geladen werden: {exc}")
+        return []
+
+
+def plot_formkurve(history, activities, weather_forecast=None):
     """Erstellt ein interaktives Dashboard der Formkurve (CTL, ATL, TSB)
     inkl. Coach-Analyse als 'formkurve.html'."""
 
     if not history:
         return
+
+    if weather_forecast is None:
+        weather_forecast = []
 
     dates = [h["date"] for h in history]
     ctl = [h["ctl"] for h in history]
@@ -588,6 +632,7 @@ def plot_formkurve(history, activities):
 
     analysis = analyze_form(history)
     recommendation = recommend_training(history)
+    weather_json = json.dumps(weather_forecast)
 
     # Eine Karte mit zwei Slidern (Dauer & Leistung) fuer jeden der naechsten 7 Tage.
     german_weekdays = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
@@ -595,19 +640,70 @@ def plot_formkurve(history, activities):
     for day in range(1, 8):
         plan_date = date.today() + timedelta(days=day)
         label = f"{german_weekdays[plan_date.weekday()]}, {plan_date.strftime('%d.%m.')}"
-        day_cards.append(f"""        <div class="day-card">
-            <div class="day-card-header">{label}</div>
+
+        weather = weather_forecast[day - 1] if day - 1 < len(weather_forecast) else None
+        weather_html = ""
+        warnings_html = ""
+        card_classes = "day-card"
+
+        if weather:
+            temp = weather["temp_max"]
+            precip = weather["precip_prob"]
+            wind = weather["wind_speed"]
+
+            if precip > 60:
+                icon = "🌧️"
+            elif wind > 25:
+                icon = "💨"
+            elif precip > 20:
+                icon = "⛅"
+            else:
+                icon = "☀️"
+
+            weather_html = f"""
+                <div class="day-weather">
+                    <div class="weather-icon">{icon}</div>
+                    <div class="weather-details">
+                        <div>{temp:.0f}°C</div>
+                        <div>💧 {precip:.0f}%</div>
+                        <div>💨 {wind:.0f} km/h</div>
+                    </div>
+                </div>"""
+
+            if precip > 60:
+                card_classes += " day-card-rain"
+                warnings_html += '\n            <div class="day-warning">🌧️ Regenjacke einpacken!</div>'
+            if wind > 25:
+                card_classes += " day-card-wind"
+                warnings_html += '\n            <div class="day-warning">💨 Starker Wind! Aero-Position halten oder Windschatten suchen</div>'
+
+        day_cards.append(f"""        <div class="{card_classes}" data-day="{day}" data-weekday="{plan_date.weekday()}">
+            <div class="day-card-header">
+                <span>{label}</span>{weather_html}
+            </div>
+            <div class="map" id="map{day}"></div>
+            <div class="route-info">
+                <div class="route-target" id="routeTargetValue{day}"></div>
+                <div class="route-distance">Geschaetzte Distanz: <span id="distanceValue{day}">0.0 km</span></div>
+                <div class="route-waypoints">Moegliche Wendepunkte: <span id="waypointsValue{day}">-</span></div>
+            </div>
             <div class="compact-slider">
                 <label>Dauer (min)</label>
-                <input type="range" class="day-duration" data-day="{day}" min="0" max="360" step="5" value="0">
-                <span class="compact-value" id="durationValue{day}">0 min</span>
+                <div class="slider-row">
+                    <input type="range" class="day-duration" data-day="{day}" min="0" max="360" step="5" value="0">
+                    <span class="compact-value" id="durationValue{day}">0 min</span>
+                </div>
             </div>
             <div class="compact-slider">
                 <label>Leistung (W)</label>
-                <input type="range" class="day-power" data-day="{day}" min="100" max="400" step="5" value="180">
-                <span class="compact-value" id="powerValue{day}">180 W</span>
+                <div class="slider-row">
+                    <input type="range" class="day-power" data-day="{day}" min="100" max="400" step="5" value="180">
+                    <span class="compact-value" id="powerValue{day}">180 W</span>
+                </div>
             </div>
-            <div class="day-tss">TSS: <span id="tssValue{day}">0.0</span></div>
+            <div class="day-tss">TSS: <span id="tssValue{day}">0.0</span></div>{warnings_html}
+            <button class="route-btn" id="routeBtn{day}" onclick="loadRealRoute({day})">🗺️ Echte Route laden</button>
+            <div class="route-elevation">Echte Hoehenmeter: <span id="elevationValue{day}">-</span></div>
         </div>""")
     day_cards_html = "\n".join(day_cards)
     chart_html = fig.to_html(full_html=False, include_plotlyjs="cdn", div_id="formkurve-chart")
@@ -617,6 +713,8 @@ def plot_formkurve(history, activities):
 <head>
 <meta charset="utf-8">
 <title>Formkurve</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
     body {{
         background-color: #111418;
@@ -740,49 +838,244 @@ def plot_formkurve(history, activities):
         font-weight: 700;
         color: #3498db;
     }}
+    .weather-oracle-box {{
+        background-color: #1c2128;
+        border: 1px solid #2d333b;
+        border-left: 4px solid #f1c40f;
+        border-radius: 10px;
+        padding: 16px 20px;
+        margin: 24px 0 16px;
+    }}
+    .weather-oracle-box h3 {{
+        margin: 0 0 8px;
+        font-size: 16px;
+        color: #f1c40f;
+    }}
+    .weather-oracle-box p {{
+        margin: 4px 0;
+        font-size: 14px;
+        color: #e6e6e6;
+    }}
+    .day-filter {{
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 8px 0 18px;
+        flex-wrap: wrap;
+    }}
+    .day-filter-label {{
+        font-size: 13px;
+        color: #9aa4af;
+        margin-right: 4px;
+    }}
+    .filter-btn {{
+        background-color: #1c2128;
+        color: #9aa4af;
+        border: 1px solid #2d333b;
+        border-radius: 6px;
+        padding: 6px 14px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s ease-in-out;
+        opacity: 0.5;
+    }}
+    .filter-btn:hover {{
+        border-color: #3498db;
+        color: #e6e6e6;
+    }}
+    .filter-btn.active {{
+        background-color: #3498db;
+        color: #111418;
+        border-color: #3498db;
+        opacity: 1;
+    }}
     .day-grid {{
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 16px;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 20px;
         margin: 16px 0 24px;
+    }}
+    @media (max-width: 700px) {{
+        .day-grid {{
+            grid-template-columns: 1fr;
+        }}
     }}
     .day-card {{
         background-color: #1c2128;
         border: 1px solid #2d333b;
         border-radius: 12px;
-        padding: 14px 18px;
+        padding: 18px 22px;
+        transition: opacity 0.2s ease, transform 0.2s ease;
+        opacity: 1;
+        transform: scale(1);
+    }}
+    .day-card.day-card-fading {{
+        opacity: 0;
+        transform: scale(0.96);
+    }}
+    .day-card.day-card-hidden {{
+        display: none;
     }}
     .day-card-header {{
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
         font-weight: 600;
         font-size: 15px;
         margin-bottom: 10px;
         color: #e6e6e6;
     }}
-    .compact-slider {{
+    .map {{
+        height: 180px;
+        width: 100%;
+        border-radius: 8px;
+        margin-bottom: 10px;
+        background-color: #2d333b;
+    }}
+    .route-info {{
+        font-size: 12px;
+        color: #9aa4af;
+        margin-bottom: 10px;
+        line-height: 1.6;
+    }}
+    .route-target {{
+        font-weight: 600;
+        color: #39ff14;
+        font-size: 13px;
+    }}
+    .route-distance {{
+        font-weight: 600;
+        color: #e6e6e6;
+        font-size: 14px;
+    }}
+    .route-waypoints span {{
+        color: #3498db;
+        font-weight: 600;
+    }}
+    .route-btn {{
+        display: block;
+        width: 100%;
+        margin-top: 12px;
+        background-color: #1c2128;
+        color: #9aa4af;
+        border: 1px solid #2d333b;
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s ease-in-out;
+    }}
+    .route-btn:hover {{
+        border-color: #39ff14;
+        color: #e6e6e6;
+    }}
+    .route-btn:disabled {{
+        opacity: 0.6;
+        cursor: wait;
+    }}
+    .route-elevation {{
+        margin-top: 8px;
+        font-size: 12px;
+        color: #9aa4af;
+        text-align: right;
+    }}
+    .route-elevation span {{
+        color: #39ff14;
+        font-weight: 600;
+    }}
+    .day-weather {{
         display: flex;
         align-items: center;
-        gap: 8px;
-        margin: 8px 0;
+        gap: 6px;
+    }}
+    .weather-icon {{
+        font-size: 34px;
+        line-height: 1;
+    }}
+    .weather-details {{
+        font-size: 11px;
+        font-weight: 400;
+        color: #9aa4af;
+        line-height: 1.4;
+        text-align: right;
+    }}
+    .day-card-rain {{
+        background-color: rgba(52, 152, 219, 0.12);
+        border-color: rgba(52, 152, 219, 0.4);
+    }}
+    .day-card-wind {{
+        border-color: rgba(241, 196, 15, 0.4);
+    }}
+    .day-warning {{
+        margin-top: 8px;
+        font-size: 12px;
+        color: #f1c40f;
+    }}
+    .compact-slider {{
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin: 14px 0;
         font-size: 13px;
     }}
     .compact-slider label {{
-        min-width: 80px;
         color: #9aa4af;
+    }}
+    .compact-slider .slider-row {{
+        display: flex;
+        align-items: center;
+        gap: 12px;
     }}
     .compact-slider input[type="range"] {{
         flex: 1;
+        width: 100%;
         accent-color: #3498db;
-        height: 4px;
+        height: 8px;
+        border-radius: 4px;
+        cursor: pointer;
+    }}
+    .compact-slider input[type="range"]::-webkit-slider-runnable-track {{
+        height: 8px;
+        border-radius: 4px;
+        background: #2d333b;
+    }}
+    .compact-slider input[type="range"]::-webkit-slider-thumb {{
+        -webkit-appearance: none;
+        appearance: none;
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        background: #3498db;
+        border: 2px solid #e6e6e6;
+        margin-top: -8px;
+        cursor: pointer;
+    }}
+    .compact-slider input[type="range"]::-moz-range-track {{
+        height: 8px;
+        border-radius: 4px;
+        background: #2d333b;
+    }}
+    .compact-slider input[type="range"]::-moz-range-thumb {{
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        background: #3498db;
+        border: 2px solid #e6e6e6;
+        cursor: pointer;
     }}
     .compact-value {{
-        min-width: 55px;
+        min-width: 60px;
         text-align: right;
         font-weight: 600;
         color: #e6e6e6;
+        font-size: 14px;
     }}
     .day-tss {{
-        margin-top: 8px;
-        font-size: 13px;
+        margin-top: 12px;
+        font-size: 16px;
+        font-weight: 700;
         color: #f1c40f;
         text-align: right;
     }}
@@ -858,6 +1151,23 @@ def plot_formkurve(history, activities):
         Leistung ein, um live zu sehen, wie sich deine Form (TSB) entwickelt.
     </p>
 
+    <div class="weather-oracle-box" id="weatherOracleBox">
+        <h3>🌦️ Die 3 besten Outdoor-Trainingstage dieser Woche</h3>
+        <p id="weatherOracleDays">Berechne...</p>
+        <p id="weatherOracleTip"></p>
+    </div>
+
+    <div class="day-filter">
+        <span class="day-filter-label">Ansicht filtern:</span>
+        <button class="filter-btn active" data-weekday="0">Mo</button>
+        <button class="filter-btn active" data-weekday="1">Di</button>
+        <button class="filter-btn active" data-weekday="2">Mi</button>
+        <button class="filter-btn active" data-weekday="3">Do</button>
+        <button class="filter-btn active" data-weekday="4">Fr</button>
+        <button class="filter-btn active" data-weekday="5">Sa</button>
+        <button class="filter-btn active" data-weekday="6">So</button>
+    </div>
+
     <div class="day-grid" id="dayGrid">
 {day_cards_html}
     </div>
@@ -878,6 +1188,217 @@ def plot_formkurve(history, activities):
 
         const simLow = document.getElementById("simLow");
         const optimalWindowBox = document.getElementById("optimalWindowBox");
+
+        // Wettervorhersage fuer die naechsten 7 Tage (Index 0 = Tag 1 / morgen).
+        const WEATHER_FORECAST = {weather_json};
+
+        // Routen-Planer: Karten zentriert auf den Linzer Hauptplatz.
+        const LINZ_HAUPTPLATZ = [48.3061, 14.2861];
+        const ROUTE_DESTINATIONS = [
+            {{ name: "Traun", distance: 10 }},
+            {{ name: "Ottensheim", distance: 10 }},
+            {{ name: "Gallneukirchen", distance: 10 }},
+            {{ name: "Enns", distance: 20 }},
+            {{ name: "Eferding", distance: 20 }},
+            {{ name: "Pregarten", distance: 20 }},
+            {{ name: "Wels", distance: 30 }},
+            {{ name: "Bad Leonfelden", distance: 30 }},
+            {{ name: "Amstetten", distance: 30 }},
+            {{ name: "Freistadt", distance: 40 }},
+            {{ name: "Steyr", distance: 45 }},
+            {{ name: "Gmunden", distance: 50 }},
+            {{ name: "Passau", distance: 55 }},
+        ];
+
+        // OpenRouteService: API-Key fuer echte Routen- und Hoehenmeter-Abfragen.
+        const ORS_API_KEY = "{ORS_API_KEY}";
+
+        // Vier Richtungs-Ziele rund um Linz, je nach Wochentag rotierend gewaehlt.
+        const ROUTE_DIRECTIONS = [
+            {{ name: "Bad Leonfelden", coords: [48.5167, 14.2833] }},  // Norden / Muehlviertel
+            {{ name: "Enns", coords: [48.2192, 14.4836] }},            // Osten
+            {{ name: "Neuhofen an der Krems", coords: [48.1667, 14.2333] }},  // Sueden
+            {{ name: "Eferding", coords: [48.3094, 13.8531] }},        // Westen
+        ];
+
+        const routeMaps = {{}};
+        const routeCircles = {{}};
+        const routeLayers = {{}};
+        const routeLoaded = {{}};
+        const routeLoading = {{}};
+        const routeReloadTimers = {{}};
+
+        for (let day = 1; day <= 7; day++) {{
+            const map = L.map("map" + day, {{
+                zoomControl: false,
+                attributionControl: false,
+                dragging: false,
+                scrollWheelZoom: false,
+                doubleClickZoom: false,
+            }}).setView(LINZ_HAUPTPLATZ, 10);
+
+            L.tileLayer("https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png", {{
+                subdomains: "abcd",
+                maxZoom: 19,
+            }}).addTo(map);
+
+            L.marker(LINZ_HAUPTPLATZ).addTo(map);
+
+            const circle = L.circle(LINZ_HAUPTPLATZ, {{
+                radius: 1,
+                color: "#39ff14",
+                weight: 1.5,
+                fillColor: "#39ff14",
+                fillOpacity: 0.1,
+            }}).addTo(map);
+
+            routeMaps[day] = map;
+            routeCircles[day] = circle;
+        }}
+
+        function estimateRouteDistance(minutes, watts) {{
+            const speedKmh = 22 + (watts / FTP) * 11;
+            return (minutes / 60) * speedKmh;
+        }}
+
+        function updateRoutePlanner(day, minutes, watts) {{
+            const distance = estimateRouteDistance(minutes, watts);
+            document.getElementById("distanceValue" + day).textContent = distance.toFixed(1) + " km";
+
+            const radius = distance / 2;
+            const waypoints = ROUTE_DESTINATIONS
+                .map(dest => ({{ name: dest.name, diff: Math.abs(dest.distance - radius) }}))
+                .sort((a, b) => a.diff - b.diff)
+                .slice(0, 3)
+                .map(dest => dest.name)
+                .join(", ");
+
+            document.getElementById("waypointsValue" + day).textContent =
+                `${{waypoints}} (Wendepunkt ca. ${{radius.toFixed(1)}} km)`;
+
+            const circle = routeCircles[day];
+            const map = routeMaps[day];
+            if (circle) {{
+                const radiusMeters = Math.max(radius * 1000, 1);
+                circle.setRadius(radiusMeters);
+                map.fitBounds(circle.getBounds());
+            }}
+        }}
+
+        function haversineKm(a, b) {{
+            const R = 6371;
+            const dLat = (b[0] - a[0]) * Math.PI / 180;
+            const dLon = (b[1] - a[1]) * Math.PI / 180;
+            const lat1 = a[0] * Math.PI / 180;
+            const lat2 = b[0] * Math.PI / 180;
+            const sinDLat = Math.sin(dLat / 2);
+            const sinDLon = Math.sin(dLon / 2);
+            const c = sinDLat * sinDLat + Math.cos(lat1) * Math.cos(lat2) * sinDLon * sinDLon;
+            return 2 * R * Math.asin(Math.sqrt(c));
+        }}
+
+        function interpolateTowards(start, end, distanceKm) {{
+            const totalKm = haversineKm(start, end);
+            const fraction = totalKm > 0 ? Math.min(Math.max(distanceKm / totalKm, 0), 1) : 0;
+            return [
+                start[0] + (end[0] - start[0]) * fraction,
+                start[1] + (end[1] - start[1]) * fraction,
+            ];
+        }}
+
+        async function loadRealRoute(day) {{
+            if (routeLoading[day]) {{
+                return;
+            }}
+            routeLoading[day] = true;
+
+            const btn = document.getElementById("routeBtn" + day);
+            const elevationEl = document.getElementById("elevationValue" + day);
+            const targetEl = document.getElementById("routeTargetValue" + day);
+            const minutes = parseInt(document.querySelector(`.day-duration[data-day="${{day}}"]`).value, 10);
+            const watts = parseInt(document.querySelector(`.day-power[data-day="${{day}}"]`).value, 10);
+            const radiusKm = estimateRouteDistance(minutes, watts) / 2;
+
+            const target = ROUTE_DIRECTIONS[(day - 1) % ROUTE_DIRECTIONS.length];
+            targetEl.textContent = `📍 Ziel: ${{target.name}}`;
+            const waypoint = interpolateTowards(LINZ_HAUPTPLATZ, target.coords, radiusKm);
+
+            btn.disabled = true;
+            btn.textContent = "Lade Route...";
+
+            try {{
+                const response = await fetch("https://api.openrouteservice.org/v2/directions/cycling-road/geojson", {{
+                    method: "POST",
+                    headers: {{
+                        "Authorization": ORS_API_KEY,
+                        "Content-Type": "application/json",
+                    }},
+                    body: JSON.stringify({{
+                        coordinates: [
+                            [LINZ_HAUPTPLATZ[1], LINZ_HAUPTPLATZ[0]],
+                            [waypoint[1], waypoint[0]],
+                        ],
+                        elevation: true,
+                    }}),
+                }});
+
+                if (!response.ok) {{
+                    throw new Error("ORS-Antwort: " + response.status);
+                }}
+
+                const geojson = await response.json();
+                const properties = geojson.features[0].properties;
+                const ascent = properties.ascent ?? properties.summary.ascent;
+                elevationEl.textContent = Math.round(ascent) + " hm";
+
+                const map = routeMaps[day];
+                if (routeCircles[day]) {{
+                    map.removeLayer(routeCircles[day]);
+                    routeCircles[day] = null;
+                }}
+                if (routeLayers[day]) {{
+                    map.removeLayer(routeLayers[day]);
+                }}
+
+                const layer = L.geoJSON(geojson, {{
+                    style: {{ color: "#39ff14", weight: 4, opacity: 0.85 }},
+                }}).addTo(map);
+                routeLayers[day] = layer;
+                map.fitBounds(layer.getBounds());
+
+                routeLoaded[day] = true;
+                btn.textContent = "🗺️ Echte Route geladen";
+                btn.disabled = false;
+            }} catch (err) {{
+                console.error(err);
+                elevationEl.textContent = "Fehler";
+                btn.textContent = "🗺️ Erneut versuchen";
+                btn.disabled = false;
+            }} finally {{
+                routeLoading[day] = false;
+            }}
+        }}
+
+        // Das Ausblenden einer Tages-Karte dient nur dem Layout - die Werte
+        // ihrer Slider bleiben weiterhin Teil der Formkurven-Simulation.
+        function setDayCardVisible(weekday, visible) {{
+            document.querySelectorAll(`.day-card[data-weekday="${{weekday}}"]`).forEach(card => {{
+                if (visible) {{
+                    card.classList.remove("day-card-fading");
+                    card.classList.remove("day-card-hidden");
+                }} else {{
+                    card.classList.add("day-card-fading");
+                    setTimeout(() => card.classList.add("day-card-hidden"), 200);
+                }}
+            }});
+        }}
+
+        document.querySelectorAll(".filter-btn").forEach(btn => {{
+            btn.addEventListener("click", () => {{
+                btn.classList.toggle("active");
+                setDayCardVisible(btn.dataset.weekday, btn.classList.contains("active"));
+            }});
+        }});
 
         const WEEKDAYS = ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"];
 
@@ -922,6 +1443,48 @@ def plot_formkurve(history, activities):
             optimalWindowBox.innerHTML = "Mit deiner aktuellen Planung liegt deine optimale Frische mehr als 14 Tage in der Zukunft.";
         }}
 
+        function scoreWeatherDay(weather) {{
+            let score = 100;
+            score -= weather.precip_prob * 1.5;
+            score -= Math.abs(weather.temp_max - 19) * 2;
+            score -= weather.wind_speed > 25 ? 15 : weather.wind_speed * 0.3;
+            return score;
+        }}
+
+        function updateWeatherOracle(forecastTsb) {{
+            const daysEl = document.getElementById("weatherOracleDays");
+            const tipEl = document.getElementById("weatherOracleTip");
+
+            if (!WEATHER_FORECAST || WEATHER_FORECAST.length === 0) {{
+                daysEl.textContent = "Keine Wetterdaten verfuegbar.";
+                tipEl.textContent = "";
+                return;
+            }}
+
+            const ranked = WEATHER_FORECAST.map((weather, idx) => ({{
+                day: idx + 1,
+                weather: weather,
+                score: scoreWeatherDay(weather),
+            }})).sort((a, b) => b.score - a.score);
+
+            const top3 = ranked.slice(0, 3);
+            daysEl.textContent = top3
+                .map((entry, i) => `${{i + 1}}. ${{formatDate(entry.day).split(",")[0]}}`)
+                .join(" | ");
+
+            const best = top3[0];
+            const bestLabel = formatDate(best.day).split(",")[0];
+            const bestTsb = forecastTsb[best.day];
+
+            if (bestTsb >= 0) {{
+                tipEl.textContent = `Nutze das Kaiserwetter am ${{bestLabel}} fuer deine Koenigseinheit!`;
+            }} else if (bestTsb >= -10) {{
+                tipEl.textContent = `${{bestLabel}} bietet die besten Bedingungen - eine solide Einheit ist gut machbar.`;
+            }} else {{
+                tipEl.textContent = `${{bestLabel}} hat das beste Wetter, aber deine Form ist noch angespannt - plane lieber locker.`;
+            }}
+        }}
+
         function simulate() {{
             let ctl = CTL_TODAY;
             let atl = ATL_TODAY;
@@ -948,6 +1511,14 @@ def plot_formkurve(history, activities):
                 const dayTss = (durationSeconds * watts * intensityFactor) / (FTP * 3600) * 100;
                 document.getElementById("tssValue" + day).textContent = dayTss.toFixed(1);
 
+                updateRoutePlanner(day, minutes, watts);
+
+                if (routeLoaded[day]) {{
+                    document.getElementById("routeBtn" + day).textContent = "Lade neue Route...";
+                    clearTimeout(routeReloadTimers[day]);
+                    routeReloadTimers[day] = setTimeout(() => loadRealRoute(day), 1200);
+                }}
+
                 ctl = ctl * CTL_DECAY + dayTss * (1 - CTL_DECAY);
                 atl = atl * ATL_DECAY + dayTss * (1 - ATL_DECAY);
                 const tsb = ctl - atl;
@@ -971,6 +1542,7 @@ def plot_formkurve(history, activities):
             }}, [6, 7, 8]);
 
             updateOptimalWindow(forecastTsb, ctl, atl);
+            updateWeatherOracle(forecastTsb);
         }}
 
         document.querySelectorAll(".day-duration, .day-power").forEach(slider => {{
@@ -997,7 +1569,9 @@ def main():
 
     history = compute_form_curve(activities)
     print_form_summary(history)
-    plot_formkurve(history, activities)
+
+    weather_forecast = fetch_weather_forecast()
+    plot_formkurve(history, activities, weather_forecast)
 
     upload_file(ACTIVITIES_PATH, DRIVE_FILENAME)
     upload_file(FORMKURVE_PATH, "formkurve.html", mimetype="text/html")

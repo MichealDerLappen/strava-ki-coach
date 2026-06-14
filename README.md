@@ -19,6 +19,11 @@ Tools rund um die Strava-API als Basis für einen KI-gestützten Trainingscoach.
    cp .env.example .env
    ```
 
+3. Optional fuer den Routen-Planer: einen kostenlosen API-Key bei
+   [OpenRouteService](https://openrouteservice.org/dev/#/signup) erstellen
+   und als `ORS_API_KEY` in `.env` eintragen (siehe
+   [Routen-Planer mit echten Strecken & Hoehenmetern](#routen-planer-mit-echten-strecken--hoehenmetern)).
+
 ## Autorisierung & Synchronisation
 
 ```bash
@@ -105,6 +110,39 @@ installiert) und nach Google Drive synchronisiert. Enthalten sind:
   der Tiefpunkt des TSB in der geplanten Woche angezeigt. Die Box
   "Optimales Trainingsfenster" reagiert dynamisch auf die Planung und nennt
   den Tag, an dem die Form (TSB) wieder positiv wird.
+- **Wetter-Vorhersage (Open-Meteo)**: Für jeden der 7 Plantage wird die
+  Wettervorhersage für Linz (Höchsttemperatur, Regenwahrscheinlichkeit,
+  Windgeschwindigkeit) von der kostenlosen
+  [Open-Meteo-API](https://open-meteo.com/) geladen (kein API-Key nötig) und
+  als Icon + Kurzinfo in der jeweiligen Tages-Karte angezeigt. Bei
+  Regenwahrscheinlichkeit > 60 % wird die Karte dezent bläulich eingefärbt
+  und ein Hinweis "🌧️ Regenjacke einpacken!" eingeblendet, bei Windstärken
+  > 25 km/h ein Hinweis "💨 Starker Wind! Aero-Position halten oder
+  Windschatten suchen". Bei fehlender Internetverbindung läuft das Skript
+  ohne Wetterdaten weiter.
+- **🌦️ Wetter-Coach-Orakel**: Box oberhalb der Wochenplanung, die die 7
+  Wettertage anhand von Temperatur, Regenwahrscheinlichkeit und Wind bewertet
+  und die 3 besten Tage für eine Ausfahrt nennt. Dazu gibt es einen
+  motivierenden Tipp, der das Wetter des besten Tages mit dem dort
+  simulierten TSB abgleicht (z. B. "Nutze das Kaiserwetter am Samstag für
+  deine Königseinheit!").
+- **Wochentags-Filter**: Über der Wochenplanung lassen sich einzelne
+  Tages-Karten per Mo–So-Buttons ein- und ausblenden, um die Ansicht
+  übersichtlicher zu halten. Die Werte ausgeblendeter Tage fließen
+  weiterhin in die Formkurven-Prognose ein.
+- **Routen-Planer mit echten Strecken & Höhenmetern**: Jede Tages-Karte
+  enthält eine kleine Leaflet-Karte (Dark-Mode-Tiles), zentriert auf den
+  Linzer Hauptplatz, mit einem Kreis, dessen Radius live aus Dauer und
+  Leistung geschätzt wird (`Geschwindigkeit = 22 + (Watt / FTP) * 11`,
+  `Distanz = Dauer/60 * Geschwindigkeit`, Wendepunkt-Radius = Distanz / 2).
+  Anhand des Radius werden passende reale Orte im Umland von Linz als
+  Wendepunkt-Vorschläge angezeigt. Über den Button "🗺️ Echte Route laden"
+  wird (sofern `ORS_API_KEY` in `.env` gesetzt ist) eine echte Strecke samt
+  Höhenprofil von [OpenRouteService](https://openrouteservice.org/) geladen,
+  als Linie auf der Karte eingezeichnet und die echten Höhenmeter
+  ("Echte Höhenmeter: XXX hm") angezeigt. Werden Dauer/Leistung danach
+  verändert, wird die Route automatisch (mit kurzer Verzögerung) neu
+  geladen.
 
 ## Google Drive Upload
 
