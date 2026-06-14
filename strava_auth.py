@@ -509,9 +509,79 @@ def plot_formkurve(history):
         line-height: 1.6;
         margin: 12px 0;
     }}
+    .slider-row {{
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin: 18px 0;
+    }}
+    .slider-row label {{
+        min-width: 260px;
+        color: #9aa4af;
+        font-size: 15px;
+    }}
+    .slider-row input[type="range"] {{
+        flex: 1;
+        accent-color: #3498db;
+    }}
+    .slider-value {{
+        min-width: 140px;
+        text-align: right;
+        font-weight: 600;
+        font-size: 15px;
+        color: #e6e6e6;
+    }}
+    .sim-results {{
+        display: flex;
+        gap: 20px;
+        flex-wrap: wrap;
+        margin-top: 24px;
+    }}
+    .sim-box {{
+        background-color: #1c2128;
+        border: 1px solid #2d333b;
+        border-radius: 12px;
+        padding: 20px 32px;
+        text-align: center;
+        flex: 1;
+        min-width: 200px;
+    }}
+    .sim-box .label {{
+        font-size: 14px;
+        color: #9aa4af;
+        margin-bottom: 8px;
+    }}
+    .sim-box .value {{
+        font-size: 24px;
+        font-weight: 700;
+        color: #3498db;
+    }}
+    .slider-row select {{
+        background-color: #1c2128;
+        color: #e6e6e6;
+        border: 1px solid #2d333b;
+        border-radius: 6px;
+        padding: 8px 12px;
+        font-size: 14px;
+    }}
+    .highlight-box {{
+        background-color: #1c2128;
+        border: 2px solid #f1c40f;
+        border-radius: 12px;
+        padding: 20px 28px;
+        margin-bottom: 24px;
+        text-align: center;
+        font-size: 20px;
+        font-weight: 600;
+    }}
+    .highlight-box.fresh {{
+        border-color: #2ecc71;
+        font-size: 22px;
+    }}
 </style>
 </head>
 <body>
+    <div class="highlight-box" id="optimalWindowBox">Berechne optimales Trainingsfenster ...</div>
     {chart_html}
     <hr>
     <h2>Coach-Analyse deines aktuellen Zustands</h2>
@@ -531,6 +601,154 @@ def plot_formkurve(history):
     </div>
     <p class="status-text">{analysis['form_status']}</p>
     <p class="status-text">{analysis['trend_status']}</p>
+
+    <hr>
+    <h2>Zukunfts-Simulator: Was-waere-wenn?</h2>
+    <p class="status-text">
+        Stelle eine geplante Einheit ein und waehle aus, an welchem Tag sie
+        stattfinden soll, um zu sehen, wie sich deine Form (TSB) in den
+        naechsten 7 Tagen entwickelt.
+    </p>
+
+    <div class="slider-row">
+        <label for="durationSlider">Geplante Dauer (Minuten)</label>
+        <input type="range" id="durationSlider" min="0" max="360" step="5" value="90">
+        <div class="slider-value" id="durationValue">90 min</div>
+    </div>
+    <div class="slider-row">
+        <label for="powerSlider">Geplante Leistung (Durchschnitts-Watt)</label>
+        <input type="range" id="powerSlider" min="100" max="400" step="5" value="180">
+        <div class="slider-value" id="powerValue">180 W</div>
+    </div>
+    <div class="slider-row">
+        <label for="dayOffsetSelect">Geplanter Trainingstag</label>
+        <select id="dayOffsetSelect">
+            <option value="0">Heute</option>
+            <option value="1" selected>Morgen</option>
+            <option value="2">In 2 Tagen</option>
+            <option value="3">In 3 Tagen</option>
+            <option value="4">In 4 Tagen</option>
+            <option value="5">In 5 Tagen</option>
+            <option value="6">In 6 Tagen</option>
+            <option value="7">In 7 Tagen</option>
+        </select>
+    </div>
+
+    <div class="sim-results">
+        <div class="sim-box">
+            <div class="label">Simulierter TSS</div>
+            <div class="value" id="simTss">-</div>
+        </div>
+        <div class="sim-box">
+            <div class="label">Tiefpunkt TSB (naechste 7 Tage)</div>
+            <div class="value" id="simLow">-</div>
+        </div>
+        <div class="sim-box">
+            <div class="label">Erholung (TSB wieder positiv)</div>
+            <div class="value" id="simRecovery">-</div>
+        </div>
+    </div>
+
+    <script>
+        const FTP = {FTP};
+        const CTL_TODAY = {analysis['ctl']};
+        const ATL_TODAY = {analysis['atl']};
+        const CTL_DECAY = Math.exp(-1 / 42);
+        const ATL_DECAY = Math.exp(-1 / 7);
+
+        const durationSlider = document.getElementById("durationSlider");
+        const powerSlider = document.getElementById("powerSlider");
+        const dayOffsetSelect = document.getElementById("dayOffsetSelect");
+        const durationValue = document.getElementById("durationValue");
+        const powerValue = document.getElementById("powerValue");
+        const simTss = document.getElementById("simTss");
+        const simLow = document.getElementById("simLow");
+        const simRecovery = document.getElementById("simRecovery");
+        const optimalWindowBox = document.getElementById("optimalWindowBox");
+
+        const WEEKDAYS = ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"];
+
+        function formatDate(daysFromToday) {{
+            const d = new Date();
+            d.setDate(d.getDate() + daysFromToday);
+            return WEEKDAYS[d.getDay()] + ", " + d.toLocaleDateString("de-DE");
+        }}
+
+        function simulate() {{
+            const minutes = parseInt(durationSlider.value, 10);
+            const watts = parseInt(powerSlider.value, 10);
+            const dayOffset = parseInt(dayOffsetSelect.value, 10);
+
+            durationValue.textContent = minutes + " min";
+            powerValue.textContent = watts + " W";
+
+            const intensityFactor = watts / FTP;
+            const durationSeconds = minutes * 60;
+            const simulatedTss = (durationSeconds * watts * intensityFactor) / (FTP * 3600) * 100;
+            simTss.textContent = simulatedTss.toFixed(1);
+
+            // Die Belastung des gewaehlten Tages wirkt sich auf den Folgetag aus.
+            const impactDay = dayOffset + 1;
+
+            let ctl = CTL_TODAY;
+            let atl = ATL_TODAY;
+
+            let lowestTsb = Infinity;
+            let lowestDay = null;
+            let recoveryDay = null;
+
+            for (let day = 1; day <= 7; day++) {{
+                const dayTss = (day === impactDay) ? simulatedTss : 0;
+                ctl = ctl * CTL_DECAY + dayTss * (1 - CTL_DECAY);
+                atl = atl * ATL_DECAY + dayTss * (1 - ATL_DECAY);
+                const tsb = ctl - atl;
+
+                if (tsb < lowestTsb) {{
+                    lowestTsb = tsb;
+                    lowestDay = day;
+                }}
+                if (recoveryDay === null && day >= impactDay && tsb > 0) {{
+                    recoveryDay = day;
+                }}
+            }}
+
+            simLow.textContent = lowestTsb.toFixed(1) + " (" + formatDate(lowestDay) + ")";
+            simRecovery.textContent = recoveryDay !== null
+                ? formatDate(recoveryDay)
+                : "nicht innerhalb von 7 Tagen";
+        }}
+
+        function computeOptimalWindow() {{
+            const tsbToday = CTL_TODAY - ATL_TODAY;
+
+            if (tsbToday >= 0) {{
+                optimalWindowBox.innerHTML = "<strong>🔥 Du bist absolut frisch! Zeit fuer das naechste Training!! 🔥</strong>";
+                optimalWindowBox.classList.add("fresh");
+                return;
+            }}
+
+            let ctl = CTL_TODAY;
+            let atl = ATL_TODAY;
+
+            for (let day = 1; day <= 14; day++) {{
+                ctl = ctl * CTL_DECAY;
+                atl = atl * ATL_DECAY;
+                const tsb = ctl - atl;
+                if (tsb >= 0) {{
+                    optimalWindowBox.innerHTML = "Optimales Zeitfenster fuer die naechste harte Einheit: <strong>" + formatDate(day) + "</strong>";
+                    return;
+                }}
+            }}
+
+            optimalWindowBox.innerHTML = "Optimales Zeitfenster fuer die naechste harte Einheit liegt mehr als 14 Tage in der Zukunft.";
+        }}
+
+        durationSlider.addEventListener("input", simulate);
+        powerSlider.addEventListener("input", simulate);
+        dayOffsetSelect.addEventListener("change", simulate);
+        simulate();
+        computeOptimalWindow();
+    </script>
 </body>
 </html>
 """
