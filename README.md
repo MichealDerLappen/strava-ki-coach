@@ -96,11 +96,15 @@ installiert) und nach Google Drive synchronisiert. Enthalten sind:
   automatisch generierte Status- (Frische-/Aufbau-/Ermüdungszone) und
   Trendtexte (Fitness steigend/sinkend), sowie Hover-Tooltips mit
   sportwissenschaftlichen Erklärungen zu CTL, ATL und TSB.
-- **Zukunfts-Simulator**: Slider für geplante Dauer (0–360 min) und
-  Leistung (100–400 W) sowie ein Dropdown für den geplanten Trainingstag
-  (heute bis in 7 Tagen). Live berechnet werden der simulierte TSS, der
-  Tiefpunkt des TSB in den nächsten 7 Tagen und der Tag, an dem die Form
-  wieder positiv wird.
+- **Wochenplanung (Zukunfts-Simulator)**: Für jeden der nächsten 7 Tage gibt
+  es eine eigene Karte mit zwei Slidern für geplante Dauer (0–360 min,
+  Schrittweite 5) und Leistung (100–400 W, Schrittweite 5). Bei jeder
+  Änderung wird der komplette 7-Tage-Verlauf neu berechnet (TSS je Tag aus
+  Dauer/Leistung, anschließend fortlaufende Anwendung der CTL-/ATL-Zerfalls-
+  formeln), live als gestrichelte Prognose-Linien ins Chart eingeblendet und
+  der Tiefpunkt des TSB in der geplanten Woche angezeigt. Die Box
+  "Optimales Trainingsfenster" reagiert dynamisch auf die Planung und nennt
+  den Tag, an dem die Form (TSB) wieder positiv wird.
 
 ## Google Drive Upload
 

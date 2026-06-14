@@ -384,6 +384,71 @@ def analyze_form(history):
     }
 
 
+def recommend_training(history):
+    """Ermittelt eine konkrete Trainings-Empfehlung basierend auf dem
+    heutigen TSB-Wert und dem Wochentag."""
+
+    tsb_today = history[-1]["tsb"]
+    weekday = date.today().weekday()  # Montag=0 ... Sonntag=6
+
+    if tsb_today > 10:
+        return {
+            "title": "⚡ Zeit zum Ballern (Wettkampf-Form / Intervalle)",
+            "text": (
+                "Deine Ermüdung ist komplett verflogen. Perfekter Zeitpunkt für "
+                "hochintensive Intervalle (VO2max-Sprints), einen harten "
+                "FTP-Test oder eine neue Bestzeit auf deinem Lieblings-Segment!"
+            ),
+            "color": "#3498db",
+        }
+
+    if tsb_today >= -10:
+        if weekday >= 4:  # Freitag, Samstag, Sonntag
+            return {
+                "title": "🚴‍♂️ Bereit für das dicke Brett (Long Ride)",
+                "text": (
+                    "Du bist im perfekten Trainingsbereich und es ist "
+                    "Wochenende! Zeit für eine epische, lange "
+                    "Grundlagenausdauer-Runde im Zone-2-Bereich auf deinem "
+                    "Canyon. Achte darauf, an Hügeln nicht zu überziehen."
+                ),
+                "color": "#f1c40f",
+            }
+        return {
+            "title": "🏃‍♂️ Kontrollierter Formaufbau (Tempo / Kraftausdauer)",
+            "text": (
+                "Unter der Woche im Büro-Alltag: Ideal für einen soliden "
+                "Tempolauf, ein knackiges Krafttraining oder eine "
+                "strukturierte Sweet-Spot-Einheit auf der Rolle, um den "
+                "Trainingsreiz hochzuhalten."
+            ),
+            "color": "#f1c40f",
+        }
+
+    if tsb_today >= -20:
+        return {
+            "title": "☕ Gemütliches Kurbeln (Active Recovery / Zone 1)",
+            "text": (
+                "Die Ermüdung in deinen Muskeln ist spürbar. Wenn du "
+                "trainierst, dann streng im regenerativen Bereich (Zone 1): "
+                "Extrem lockeres Beine-Ausschütteln auf dem Rad oder ein ganz "
+                "entspannter Spaziergang. Bloß kein Stress heute!"
+            ),
+            "color": "#e67e22",
+        }
+
+    return {
+        "title": "🛑 Strikte Regeneration (Couch-Tag gefordert!)",
+        "text": (
+            "Deine Ermüdung ist kritisch hoch. Um deine Sehnen zu schonen und "
+            "dein Immunsystem zu schützen, bleibt das Canyon heute stehen. "
+            "Fokus auf Dehnen, Blackroll, nahrhaftes Essen und mindestens "
+            "8 Stunden Schlaf!"
+        ),
+        "color": "#e74c3c",
+    }
+
+
 def plot_formkurve(history, activities):
     """Erstellt ein interaktives Dashboard der Formkurve (CTL, ATL, TSB)
     inkl. Coach-Analyse als 'formkurve.html'."""
@@ -463,6 +528,33 @@ def plot_formkurve(history, activities):
         hovertemplate="%{text}<extra></extra>",
     ))
 
+    # Platzhalter-Traces fuer die Live-Prognose aus dem Zukunfts-Simulator
+    # (Indizes werden unten im JavaScript ueber Plotly.restyle aktualisiert).
+    today_date = dates[-1]
+    forecast_dates = [today_date] * 8
+    forecast_ctl = [ctl[-1]] * 8
+    forecast_atl = [atl[-1]] * 8
+    forecast_tsb = [tsb[-1]] * 8
+
+    fig.add_trace(go.Scatter(
+        x=forecast_dates, y=forecast_ctl,
+        name="Fitness (Prognose)",
+        mode="lines",
+        line=dict(color="#2ecc71", width=3, dash="dot"),
+    ))
+    fig.add_trace(go.Scatter(
+        x=forecast_dates, y=forecast_atl,
+        name="Ermuedung (Prognose)",
+        mode="lines",
+        line=dict(color="#e74c3c", width=1.5, dash="dot"),
+    ))
+    fig.add_trace(go.Scatter(
+        x=forecast_dates, y=forecast_tsb,
+        name="Form (Prognose)",
+        mode="lines",
+        line=dict(color="#f1c40f", width=2.5, dash="dot"),
+    ))
+
     fig.add_hline(y=0, line_width=1, line_dash="dash", line_color="grey")
 
     fig.update_layout(
@@ -495,7 +587,30 @@ def plot_formkurve(history, activities):
     )
 
     analysis = analyze_form(history)
-    chart_html = fig.to_html(full_html=False, include_plotlyjs="cdn")
+    recommendation = recommend_training(history)
+
+    # Eine Karte mit zwei Slidern (Dauer & Leistung) fuer jeden der naechsten 7 Tage.
+    german_weekdays = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
+    day_cards = []
+    for day in range(1, 8):
+        plan_date = date.today() + timedelta(days=day)
+        label = f"{german_weekdays[plan_date.weekday()]}, {plan_date.strftime('%d.%m.')}"
+        day_cards.append(f"""        <div class="day-card">
+            <div class="day-card-header">{label}</div>
+            <div class="compact-slider">
+                <label>Dauer (min)</label>
+                <input type="range" class="day-duration" data-day="{day}" min="0" max="360" step="5" value="0">
+                <span class="compact-value" id="durationValue{day}">0 min</span>
+            </div>
+            <div class="compact-slider">
+                <label>Leistung (W)</label>
+                <input type="range" class="day-power" data-day="{day}" min="100" max="400" step="5" value="180">
+                <span class="compact-value" id="powerValue{day}">180 W</span>
+            </div>
+            <div class="day-tss">TSS: <span id="tssValue{day}">0.0</span></div>
+        </div>""")
+    day_cards_html = "\n".join(day_cards)
+    chart_html = fig.to_html(full_html=False, include_plotlyjs="cdn", div_id="formkurve-chart")
 
     html = f"""<!DOCTYPE html>
 <html lang="de">
@@ -625,13 +740,51 @@ def plot_formkurve(history, activities):
         font-weight: 700;
         color: #3498db;
     }}
-    .slider-row select {{
+    .day-grid {{
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 16px;
+        margin: 16px 0 24px;
+    }}
+    .day-card {{
         background-color: #1c2128;
-        color: #e6e6e6;
         border: 1px solid #2d333b;
-        border-radius: 6px;
-        padding: 8px 12px;
-        font-size: 14px;
+        border-radius: 12px;
+        padding: 14px 18px;
+    }}
+    .day-card-header {{
+        font-weight: 600;
+        font-size: 15px;
+        margin-bottom: 10px;
+        color: #e6e6e6;
+    }}
+    .compact-slider {{
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 8px 0;
+        font-size: 13px;
+    }}
+    .compact-slider label {{
+        min-width: 80px;
+        color: #9aa4af;
+    }}
+    .compact-slider input[type="range"] {{
+        flex: 1;
+        accent-color: #3498db;
+        height: 4px;
+    }}
+    .compact-value {{
+        min-width: 55px;
+        text-align: right;
+        font-weight: 600;
+        color: #e6e6e6;
+    }}
+    .day-tss {{
+        margin-top: 8px;
+        font-size: 13px;
+        color: #f1c40f;
+        text-align: right;
     }}
     .highlight-box {{
         background-color: #1c2128;
@@ -647,10 +800,34 @@ def plot_formkurve(history, activities):
         border-color: #2ecc71;
         font-size: 22px;
     }}
+    .recommendation-box {{
+        background-color: #1c2128;
+        border: 1px solid #2d333b;
+        border-left: 6px solid {recommendation['color']};
+        border-radius: 12px;
+        padding: 20px 28px;
+        margin-bottom: 24px;
+    }}
+    .recommendation-box h3 {{
+        margin: 0 0 10px 0;
+        font-size: 20px;
+        font-weight: 700;
+    }}
+    .recommendation-box p {{
+        margin: 0;
+        font-size: 16px;
+        line-height: 1.6;
+        color: #cfd6dd;
+    }}
 </style>
 </head>
 <body>
     <div class="highlight-box" id="optimalWindowBox">Berechne optimales Trainingsfenster ...</div>
+    <div class="recommendation-box">
+        <h3>Coach-Empfehlung für deine nächste Einheit</h3>
+        <p><strong>{recommendation['title']}</strong></p>
+        <p>{recommendation['text']}</p>
+    </div>
     {chart_html}
     <hr>
     <h2>Coach-Analyse deines aktuellen Zustands</h2>
@@ -675,49 +852,20 @@ def plot_formkurve(history, activities):
     <p class="status-text">{analysis['trend_status']}</p>
 
     <hr>
-    <h2>Zukunfts-Simulator: Was-waere-wenn?</h2>
+    <h2>Wochenplanung (Vorschau naechste 7 Tage)</h2>
     <p class="status-text">
-        Stelle eine geplante Einheit ein und waehle aus, an welchem Tag sie
-        stattfinden soll, um zu sehen, wie sich deine Form (TSB) in den
-        naechsten 7 Tagen entwickelt.
+        Stelle fuer jeden Tag der kommenden Woche die geplante Dauer und
+        Leistung ein, um live zu sehen, wie sich deine Form (TSB) entwickelt.
     </p>
 
-    <div class="slider-row">
-        <label for="durationSlider">Geplante Dauer (Minuten)</label>
-        <input type="range" id="durationSlider" min="0" max="360" step="5" value="90">
-        <div class="slider-value" id="durationValue">90 min</div>
-    </div>
-    <div class="slider-row">
-        <label for="powerSlider">Geplante Leistung (Durchschnitts-Watt)</label>
-        <input type="range" id="powerSlider" min="100" max="400" step="5" value="180">
-        <div class="slider-value" id="powerValue">180 W</div>
-    </div>
-    <div class="slider-row">
-        <label for="dayOffsetSelect">Geplanter Trainingstag</label>
-        <select id="dayOffsetSelect">
-            <option value="0">Heute</option>
-            <option value="1" selected>Morgen</option>
-            <option value="2">In 2 Tagen</option>
-            <option value="3">In 3 Tagen</option>
-            <option value="4">In 4 Tagen</option>
-            <option value="5">In 5 Tagen</option>
-            <option value="6">In 6 Tagen</option>
-            <option value="7">In 7 Tagen</option>
-        </select>
+    <div class="day-grid" id="dayGrid">
+{day_cards_html}
     </div>
 
     <div class="sim-results">
         <div class="sim-box">
-            <div class="label">Simulierter TSS</div>
-            <div class="value" id="simTss">-</div>
-        </div>
-        <div class="sim-box">
-            <div class="label">Tiefpunkt TSB (naechste 7 Tage)</div>
+            <div class="label">Tiefpunkt TSB (geplante Woche)</div>
             <div class="value" id="simLow">-</div>
-        </div>
-        <div class="sim-box">
-            <div class="label">Erholung (TSB wieder positiv)</div>
-            <div class="value" id="simRecovery">-</div>
         </div>
     </div>
 
@@ -728,14 +876,7 @@ def plot_formkurve(history, activities):
         const CTL_DECAY = Math.exp(-1 / 42);
         const ATL_DECAY = Math.exp(-1 / 7);
 
-        const durationSlider = document.getElementById("durationSlider");
-        const powerSlider = document.getElementById("powerSlider");
-        const dayOffsetSelect = document.getElementById("dayOffsetSelect");
-        const durationValue = document.getElementById("durationValue");
-        const powerValue = document.getElementById("powerValue");
-        const simTss = document.getElementById("simTss");
         const simLow = document.getElementById("simLow");
-        const simRecovery = document.getElementById("simRecovery");
         const optimalWindowBox = document.getElementById("optimalWindowBox");
 
         const WEEKDAYS = ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"];
@@ -746,80 +887,97 @@ def plot_formkurve(history, activities):
             return WEEKDAYS[d.getDay()] + ", " + d.toLocaleDateString("de-DE");
         }}
 
+        function isoDate(daysFromToday) {{
+            const d = new Date();
+            d.setDate(d.getDate() + daysFromToday);
+            return d.toISOString().split("T")[0];
+        }}
+
+        function updateOptimalWindow(forecastTsb, ctlEnd, atlEnd) {{
+            if (forecastTsb[0] >= 0) {{
+                optimalWindowBox.innerHTML = "<strong>🔥 Du bist absolut frisch! Zeit fuer das naechste Training!! 🔥</strong>";
+                optimalWindowBox.classList.add("fresh");
+                return;
+            }}
+            optimalWindowBox.classList.remove("fresh");
+
+            for (let day = 1; day <= 7; day++) {{
+                if (forecastTsb[day] >= 0) {{
+                    optimalWindowBox.innerHTML = "Mit deiner aktuellen Planung erreichst du deine optimale Frische am <strong>" + formatDate(day) + "</strong>.";
+                    return;
+                }}
+            }}
+
+            let ctl = ctlEnd;
+            let atl = atlEnd;
+            for (let day = 8; day <= 14; day++) {{
+                ctl = ctl * CTL_DECAY;
+                atl = atl * ATL_DECAY;
+                if (ctl - atl >= 0) {{
+                    optimalWindowBox.innerHTML = "Mit deiner aktuellen Planung erreichst du deine optimale Frische am <strong>" + formatDate(day) + "</strong>.";
+                    return;
+                }}
+            }}
+
+            optimalWindowBox.innerHTML = "Mit deiner aktuellen Planung liegt deine optimale Frische mehr als 14 Tage in der Zukunft.";
+        }}
+
         function simulate() {{
-            const minutes = parseInt(durationSlider.value, 10);
-            const watts = parseInt(powerSlider.value, 10);
-            const dayOffset = parseInt(dayOffsetSelect.value, 10);
-
-            durationValue.textContent = minutes + " min";
-            powerValue.textContent = watts + " W";
-
-            const intensityFactor = watts / FTP;
-            const durationSeconds = minutes * 60;
-            const simulatedTss = (durationSeconds * watts * intensityFactor) / (FTP * 3600) * 100;
-            simTss.textContent = simulatedTss.toFixed(1);
-
-            // Die Belastung des gewaehlten Tages wirkt sich auf den Folgetag aus.
-            const impactDay = dayOffset + 1;
-
             let ctl = CTL_TODAY;
             let atl = ATL_TODAY;
 
-            let lowestTsb = Infinity;
-            let lowestDay = null;
-            let recoveryDay = null;
+            const forecastDates = [isoDate(0)];
+            const forecastCtl = [ctl];
+            const forecastAtl = [atl];
+            const forecastTsb = [ctl - atl];
+
+            let lowestTsb = forecastTsb[0];
+            let lowestDay = 0;
 
             for (let day = 1; day <= 7; day++) {{
-                const dayTss = (day === impactDay) ? simulatedTss : 0;
+                const durationSlider = document.querySelector(`.day-duration[data-day="${{day}}"]`);
+                const powerSlider = document.querySelector(`.day-power[data-day="${{day}}"]`);
+                const minutes = parseInt(durationSlider.value, 10);
+                const watts = parseInt(powerSlider.value, 10);
+
+                document.getElementById("durationValue" + day).textContent = minutes + " min";
+                document.getElementById("powerValue" + day).textContent = watts + " W";
+
+                const intensityFactor = watts / FTP;
+                const durationSeconds = minutes * 60;
+                const dayTss = (durationSeconds * watts * intensityFactor) / (FTP * 3600) * 100;
+                document.getElementById("tssValue" + day).textContent = dayTss.toFixed(1);
+
                 ctl = ctl * CTL_DECAY + dayTss * (1 - CTL_DECAY);
                 atl = atl * ATL_DECAY + dayTss * (1 - ATL_DECAY);
                 const tsb = ctl - atl;
+
+                forecastDates.push(isoDate(day));
+                forecastCtl.push(ctl);
+                forecastAtl.push(atl);
+                forecastTsb.push(tsb);
 
                 if (tsb < lowestTsb) {{
                     lowestTsb = tsb;
                     lowestDay = day;
                 }}
-                if (recoveryDay === null && day >= impactDay && tsb > 0) {{
-                    recoveryDay = day;
-                }}
             }}
 
             simLow.textContent = lowestTsb.toFixed(1) + " (" + formatDate(lowestDay) + ")";
-            simRecovery.textContent = recoveryDay !== null
-                ? formatDate(recoveryDay)
-                : "nicht innerhalb von 7 Tagen";
+
+            Plotly.restyle("formkurve-chart", {{
+                x: [forecastDates, forecastDates, forecastDates],
+                y: [forecastCtl, forecastAtl, forecastTsb],
+            }}, [6, 7, 8]);
+
+            updateOptimalWindow(forecastTsb, ctl, atl);
         }}
 
-        function computeOptimalWindow() {{
-            const tsbToday = CTL_TODAY - ATL_TODAY;
+        document.querySelectorAll(".day-duration, .day-power").forEach(slider => {{
+            slider.addEventListener("input", simulate);
+        }});
 
-            if (tsbToday >= 0) {{
-                optimalWindowBox.innerHTML = "<strong>🔥 Du bist absolut frisch! Zeit fuer das naechste Training!! 🔥</strong>";
-                optimalWindowBox.classList.add("fresh");
-                return;
-            }}
-
-            let ctl = CTL_TODAY;
-            let atl = ATL_TODAY;
-
-            for (let day = 1; day <= 14; day++) {{
-                ctl = ctl * CTL_DECAY;
-                atl = atl * ATL_DECAY;
-                const tsb = ctl - atl;
-                if (tsb >= 0) {{
-                    optimalWindowBox.innerHTML = "Optimales Zeitfenster fuer die naechste harte Einheit: <strong>" + formatDate(day) + "</strong>";
-                    return;
-                }}
-            }}
-
-            optimalWindowBox.innerHTML = "Optimales Zeitfenster fuer die naechste harte Einheit liegt mehr als 14 Tage in der Zukunft.";
-        }}
-
-        durationSlider.addEventListener("input", simulate);
-        powerSlider.addEventListener("input", simulate);
-        dayOffsetSelect.addEventListener("change", simulate);
         simulate();
-        computeOptimalWindow();
     </script>
 </body>
 </html>
