@@ -384,7 +384,7 @@ def analyze_form(history):
     }
 
 
-def plot_formkurve(history):
+def plot_formkurve(history, activities):
     """Erstellt ein interaktives Dashboard der Formkurve (CTL, ATL, TSB)
     inkl. Coach-Analyse als 'formkurve.html'."""
 
@@ -438,6 +438,29 @@ def plot_formkurve(history):
         name="Form (TSB)",
         mode="lines",
         line=dict(color="#f1c40f", width=2.5),
+    ))
+
+    # Zeitleiste der Aktivitaeten als feine Striche am unteren Rand des Charts.
+    marker_y = min(min(ctl), min(atl), min(tsb)) - 5
+    activity_dates = []
+    activity_text = []
+    for activity in activities:
+        activity_dates.append(activity["start_date"][:10])
+        distance_km = activity.get("distance", 0) / 1000
+        activity_text.append(
+            f"{activity.get('name', '')}<br>"
+            f"{activity.get('type', '')}<br>"
+            f"{distance_km:.1f} km"
+        )
+
+    fig.add_trace(go.Scatter(
+        x=activity_dates,
+        y=[marker_y] * len(activity_dates),
+        name="Aktivitaeten",
+        mode="markers",
+        marker=dict(symbol="line-ns-open", size=10, color="rgba(220, 220, 220, 0.6)", line=dict(width=1.5)),
+        text=activity_text,
+        hovertemplate="%{text}<extra></extra>",
     ))
 
     fig.add_hline(y=0, line_width=1, line_dash="dash", line_color="grey")
@@ -816,7 +839,7 @@ def main():
 
     history = compute_form_curve(activities)
     print_form_summary(history)
-    plot_formkurve(history)
+    plot_formkurve(history, activities)
 
     upload_file(ACTIVITIES_PATH, DRIVE_FILENAME)
     upload_file(FORMKURVE_PATH, "formkurve.html", mimetype="text/html")
