@@ -1,5 +1,6 @@
 """Hilfsfunktionen zum Hoch- bzw. Aktualisieren einer Datei in Google Drive."""
 
+import mimetypes
 import os
 
 from google.auth.transport.requests import Request
@@ -41,7 +42,7 @@ def get_drive_service():
     return build("drive", "v3", credentials=creds)
 
 
-def upload_file(local_path, drive_filename):
+def upload_file(local_path, drive_filename, mimetype=None):
     """Laedt `local_path` nach Google Drive hoch und ueberschreibt eine
     bereits vorhandene Datei mit dem Namen `drive_filename`, falls sie existiert."""
 
@@ -59,7 +60,10 @@ def upload_file(local_path, drive_filename):
     )
     files = results.get("files", [])
 
-    media = MediaFileUpload(local_path, mimetype="application/json")
+    if mimetype is None:
+        mimetype = mimetypes.guess_type(local_path)[0] or "application/octet-stream"
+
+    media = MediaFileUpload(local_path, mimetype=mimetype)
 
     if files:
         file_id = files[0]["id"]

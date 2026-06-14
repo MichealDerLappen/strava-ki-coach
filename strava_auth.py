@@ -342,9 +342,51 @@ def print_form_summary(history):
     )
 
 
+def analyze_form(history):
+    """Erstellt eine automatisierte Coach-Analyse basierend auf der Formkurve."""
+
+    today = history[-1]
+    ctl_today = today["ctl"]
+    atl_today = today["atl"]
+    tsb_today = today["tsb"]
+
+    if tsb_today > 5:
+        form_status = (
+            "🟢 Frische-Zone (Form ist hoch, dein Koerper ist maximal bereit "
+            "fuer harte Belastungen oder einen Wettkampf)."
+        )
+    elif tsb_today >= -10:
+        form_status = (
+            "🟡 Optimaler Trainingsreiz (Du bist im perfekten Aufbau-Bereich. "
+            "Die Ermuedung ist da, aber kontrolliert)."
+        )
+    else:
+        form_status = (
+            "🔴 Akute Ermuedungs-Zone (Die Trainingsbelastung war sehr hoch. "
+            "Fokus strikt auf Erholung und Schlaf legen)."
+        )
+
+    ctl_week_ago = history[-8]["ctl"] if len(history) > 7 else history[0]["ctl"]
+    if ctl_today > ctl_week_ago:
+        trend_status = "📈 Deine Fitness (Langzeit-Basis) ist aktuell steigend."
+    else:
+        trend_status = (
+            "📉 Deine Fitness stagniert oder sinkt leicht "
+            "(Regenerationsphase oder Trainingspause)."
+        )
+
+    return {
+        "ctl": ctl_today,
+        "atl": atl_today,
+        "tsb": tsb_today,
+        "form_status": form_status,
+        "trend_status": trend_status,
+    }
+
+
 def plot_formkurve(history):
     """Erstellt ein interaktives Dashboard der Formkurve (CTL, ATL, TSB)
-    als 'formkurve.html'."""
+    inkl. Coach-Analyse als 'formkurve.html'."""
 
     if not history:
         return
@@ -407,9 +449,94 @@ def plot_formkurve(history):
         xaxis_title="Datum",
         yaxis_title="Trainingsstress",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        paper_bgcolor="#111418",
+        plot_bgcolor="#111418",
     )
 
-    fig.write_html(FORMKURVE_PATH)
+    analysis = analyze_form(history)
+    chart_html = fig.to_html(full_html=False, include_plotlyjs="cdn")
+
+    html = f"""<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Formkurve</title>
+<style>
+    body {{
+        background-color: #111418;
+        color: #e6e6e6;
+        font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+        margin: 0;
+        padding: 0 24px 48px;
+    }}
+    h2 {{
+        font-weight: 600;
+        margin-top: 40px;
+    }}
+    hr {{
+        border: none;
+        border-top: 1px solid #2d333b;
+        margin: 32px 0;
+    }}
+    .metrics {{
+        display: flex;
+        gap: 20px;
+        flex-wrap: wrap;
+        margin-bottom: 24px;
+    }}
+    .metric-box {{
+        background-color: #1c2128;
+        border: 1px solid #2d333b;
+        border-radius: 12px;
+        padding: 20px 32px;
+        text-align: center;
+        min-width: 150px;
+    }}
+    .metric-box .label {{
+        font-size: 14px;
+        color: #9aa4af;
+        margin-bottom: 8px;
+    }}
+    .metric-box .value {{
+        font-size: 32px;
+        font-weight: 700;
+    }}
+    .ctl {{ color: #2ecc71; }}
+    .atl {{ color: #e74c3c; }}
+    .tsb {{ color: #f1c40f; }}
+    .status-text {{
+        font-size: 18px;
+        line-height: 1.6;
+        margin: 12px 0;
+    }}
+</style>
+</head>
+<body>
+    {chart_html}
+    <hr>
+    <h2>Coach-Analyse deines aktuellen Zustands</h2>
+    <div class="metrics">
+        <div class="metric-box">
+            <div class="label">Fitness (CTL)</div>
+            <div class="value ctl">{analysis['ctl']}</div>
+        </div>
+        <div class="metric-box">
+            <div class="label">Ermuedung (ATL)</div>
+            <div class="value atl">{analysis['atl']}</div>
+        </div>
+        <div class="metric-box">
+            <div class="label">Form (TSB)</div>
+            <div class="value tsb">{analysis['tsb']}</div>
+        </div>
+    </div>
+    <p class="status-text">{analysis['form_status']}</p>
+    <p class="status-text">{analysis['trend_status']}</p>
+</body>
+</html>
+"""
+
+    with open(FORMKURVE_PATH, "w", encoding="utf-8") as f:
+        f.write(html)
     print(f"Formkurve gespeichert unter {FORMKURVE_PATH}")
 
 
@@ -425,6 +552,7 @@ def main():
     plot_formkurve(history)
 
     upload_file(ACTIVITIES_PATH, DRIVE_FILENAME)
+    upload_file(FORMKURVE_PATH, "formkurve.html", mimetype="text/html")
 
 
 if __name__ == "__main__":
