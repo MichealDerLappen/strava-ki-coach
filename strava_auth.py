@@ -1,23 +1,26 @@
-"""Strava OAuth2 authorization flow + Aktivitaeten-Synchronisation.
+"""Garmin Connect Aktivitaeten-Synchronisation + Formkurven-Dashboard.
 
-Starts a local webserver on port 8000, opens the Strava authorization page
-in the browser, receives the redirect with the authorization code, exchanges
-it for access/refresh tokens and stores them in the .env file.
+Urspruenglich auf der Strava-API aufgebaut; seit Juli 2026 werden die
+Trainingsdaten direkt von Garmin Connect bezogen.
 
-Anschliessend werden neue Aktivitaeten von Strava abgerufen, lokal in
-'activities.json' gespeichert und nach Google Drive hochgeladen.
+Meldet sich mit den Garmin-Zugangsdaten aus der .env an, laedt neue
+Aktivitaeten herunter, berechnet die Formkurve nach dem Banister-Modell
+und generiert ein interaktives Dark-Mode-Dashboard (formkurve.html),
+das nach Google Drive synchronisiert wird.
 """
 
 import json
 import os
-import time
-import webbrowser
 from datetime import datetime, date, timedelta
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import urlencode, urlparse, parse_qs
 
 import requests
-from dotenv import load_dotenv, set_key
+from dotenv import load_dotenv
+
+try:
+    from garminconnect import Garmin
+except ImportError:
+    os.system("pip install garminconnect garth")
+    from garminconnect import Garmin
 
 try:
     import plotly.graph_objects as go
@@ -45,144 +48,90 @@ LTHR = 172  # angenommene Laktatschwelle (Herzfrequenz in bpm)
 CTL_DAYS = 42  # Zeitkonstante fuer die Fitness (Chronic Training Load)
 ATL_DAYS = 7  # Zeitkonstante fuer die Ermuedung (Acute Training Load)
 
-AUTHORIZE_URL = "https://www.strava.com/oauth/authorize"
-TOKEN_URL = "https://www.strava.com/oauth/token"
-ACTIVITIES_URL = "https://www.strava.com/api/v3/athlete/activities"
-REDIRECT_URI = "http://localhost:8000/authorization"
-SCOPE = "activity:read_all"
-PAGE_SIZE = 200
+# Garmin-Session wird in diesem Ordner gecacht, damit kein erneutes
+# Login bei jedem Aufruf noetig ist.
+GARTH_HOME = os.path.join(BASE_DIR, ".garth")
 
 load_dotenv(ENV_PATH)
 
 # OpenRouteService: API-Key fuer echte Routen- und Hoehenmeter-Berechnung
 ORS_API_KEY = os.getenv("ORS_API_KEY", "")
 
-CLIENT_ID = os.environ.get("STRAVA_CLIENT_ID")
-CLIENT_SECRET = os.environ.get("STRAVA_CLIENT_SECRET")
+GARMIN_EMAIL = os.getenv("GARMIN_EMAIL", "")
+GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD", "")
 
-if not CLIENT_ID or not CLIENT_SECRET:
+if not GARMIN_EMAIL or not GARMIN_PASSWORD:
     raise SystemExit(
-        "STRAVA_CLIENT_ID und STRAVA_CLIENT_SECRET muessen in der .env Datei "
+        "GARMIN_EMAIL und GARMIN_PASSWORD muessen in der .env Datei "
         "gesetzt sein (siehe .env.example)."
     )
 
-
-class AuthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        query = parse_qs(urlparse(self.path).query)
-
-        if "error" in query:
-            self._respond("Autorisierung abgelehnt. Du kannst dieses Fenster schliessen.")
-            self.server.auth_code = None
-            self.server.error = query["error"][0]
-            return
-
-        code = query.get("code", [None])[0]
-        if code is None:
-            self._respond("Kein Code erhalten.")
-            return
-
-        self.server.auth_code = code
-        self._respond("Autorisierung erfolgreich! Du kannst dieses Fenster schliessen.")
-
-    def _respond(self, message):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(f"<html><body><h1>{message}</h1></body></html>".encode("utf-8"))
-
-    def log_message(self, format, *args):
-        pass
+# Garmin-Aktivitaetstypen auf interne Typen abbilden
+GARMIN_TYPE_MAP = {
+    "cycling": "Ride",
+    "road_biking": "Ride",
+    "indoor_cycling": "Ride",
+    "mountain_biking": "Ride",
+    "gravel_cycling": "Ride",
+    "running": "Run",
+    "trail_running": "Run",
+    "treadmill_running": "Run",
+    "hiking": "Hike",
+    "strength_training": "WeightTraining",
+    "walking": "Walk",
+    "swimming": "Swim",
+    "open_water_swimming": "Swim",
+    "yoga": "Workout",
+    "fitness_equipment": "Workout",
+}
 
 
-def get_authorization_code():
-    params = {
-        "client_id": CLIENT_ID,
-        "redirect_uri": REDIRECT_URI,
-        "response_type": "code",
-        "approval_prompt": "auto",
-        "scope": SCOPE,
+def garmin_login():
+    """Meldet sich bei Garmin Connect an. Beim ersten Aufruf werden die
+    Zugangsdaten aus der .env verwendet und die Session in GARTH_HOME
+    gecacht. Danach genuegt der Cache fuer erneute Anmeldungen."""
+
+    client = Garmin(email=GARMIN_EMAIL, password=GARMIN_PASSWORD)
+    try:
+        client.login(GARTH_HOME)
+        print("Garmin-Session aus Cache geladen.")
+    except Exception:
+        print("Melde bei Garmin Connect an ...")
+        client.login()
+        client.garth.dump(GARTH_HOME)
+        print("Garmin-Session gespeichert.")
+    return client
+
+
+def garmin_to_internal(raw):
+    """Wandelt einen Garmin-Aktivitaetseintrag in das interne Format um."""
+
+    type_key = (raw.get("activityType") or {}).get("typeKey", "")
+    activity_type = GARMIN_TYPE_MAP.get(type_key, type_key.title())
+
+    def to_iso(raw_str, suffix="Z"):
+        if not raw_str:
+            return None
+        return raw_str.replace(" ", "T") + suffix
+
+    return {
+        "id": raw.get("activityId"),
+        "name": raw.get("activityName", ""),
+        "type": activity_type,
+        "start_date": to_iso(raw.get("startTimeGMT"), "Z"),
+        "start_date_local": to_iso(raw.get("startTimeLocal"), ""),
+        "distance": raw.get("distance") or 0,
+        "moving_time": int(raw.get("movingDuration") or raw.get("duration") or 0),
+        "elapsed_time": int(raw.get("duration") or 0),
+        "total_elevation_gain": raw.get("elevationGain"),
+        "average_watts": raw.get("avgPower"),
+        "weighted_average_watts": raw.get("normPower") or raw.get("avgPower"),
+        "average_heartrate": raw.get("averageHR") or raw.get("avgHr"),
+        "max_heartrate": raw.get("maxHR"),
+        "average_cadence": (raw.get("averageBikingCadenceInRevPerMinute")
+                            or raw.get("avgRunCadence")),
+        "suffer_score": None,
     }
-    auth_url = f"{AUTHORIZE_URL}?{urlencode(params)}"
-
-    server = HTTPServer(("localhost", 8000), AuthHandler)
-    server.auth_code = None
-    server.error = None
-
-    print(f"Oeffne Browser zur Autorisierung:\n{auth_url}")
-    webbrowser.open(auth_url)
-
-    print("Warte auf Autorisierung (http://localhost:8000) ...")
-    while server.auth_code is None and server.error is None:
-        server.handle_request()
-
-    server.server_close()
-
-    if server.error:
-        raise SystemExit(f"Autorisierung fehlgeschlagen: {server.error}")
-
-    return server.auth_code
-
-
-def exchange_token(code):
-    response = requests.post(
-        TOKEN_URL,
-        data={
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-            "code": code,
-            "grant_type": "authorization_code",
-        },
-    )
-    response.raise_for_status()
-    return response.json()
-
-
-def refresh_token(refresh_token_value):
-    response = requests.post(
-        TOKEN_URL,
-        data={
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-            "refresh_token": refresh_token_value,
-            "grant_type": "refresh_token",
-        },
-    )
-    response.raise_for_status()
-    return response.json()
-
-
-def save_tokens(token_data):
-    set_key(ENV_PATH, "STRAVA_ACCESS_TOKEN", token_data["access_token"])
-    set_key(ENV_PATH, "STRAVA_REFRESH_TOKEN", token_data["refresh_token"])
-    set_key(ENV_PATH, "STRAVA_EXPIRES_AT", str(token_data["expires_at"]))
-    os.environ["STRAVA_ACCESS_TOKEN"] = token_data["access_token"]
-    os.environ["STRAVA_REFRESH_TOKEN"] = token_data["refresh_token"]
-    os.environ["STRAVA_EXPIRES_AT"] = str(token_data["expires_at"])
-
-
-def ensure_access_token():
-    """Gibt einen gueltigen Access-Token zurueck und fuehrt bei Bedarf den
-    Autorisierungs- bzw. Refresh-Flow aus."""
-
-    access_token = os.environ.get("STRAVA_ACCESS_TOKEN")
-    refresh_token_value = os.environ.get("STRAVA_REFRESH_TOKEN")
-    expires_at = int(os.environ.get("STRAVA_EXPIRES_AT") or 0)
-
-    if not access_token or not refresh_token_value:
-        code = get_authorization_code()
-        token_data = exchange_token(code)
-        save_tokens(token_data)
-        print(f"Tokens erfolgreich in {ENV_PATH} gespeichert.")
-        return token_data["access_token"]
-
-    if expires_at <= int(time.time()):
-        print("Access-Token ist abgelaufen, erneuere ihn ...")
-        token_data = refresh_token(refresh_token_value)
-        save_tokens(token_data)
-        return token_data["access_token"]
-
-    return access_token
 
 
 def load_existing_activities():
@@ -206,44 +155,27 @@ def latest_start_date(activities):
     )
 
 
-def fetch_activities(access_token, after=None, per_page=PAGE_SIZE):
-    """Ruft Aktivitaeten ab (neueste zuerst) und paginiert dabei so lange,
-    bis eine Abfrage eine leere Liste zurueckgibt."""
-
-    headers = {"Authorization": f"Bearer {access_token}"}
-    activities = []
-    page = 1
-
-    while True:
-        params = {"per_page": per_page, "page": page}
-        if after is not None:
-            params["after"] = int(after.timestamp())
-
-        response = requests.get(ACTIVITIES_URL, headers=headers, params=params)
-        response.raise_for_status()
-        batch = response.json()
-        if not batch:
-            break
-
-        activities.extend(batch)
-        page += 1
-
-    return activities
-
-
-def sync_activities(access_token):
-    """Laedt neue Aktivitaeten herunter und haengt sie an 'activities.json' an."""
+def sync_activities(client):
+    """Laedt neue Garmin-Aktivitaeten herunter und haengt sie an activities.json an."""
 
     existing = load_existing_activities()
     last_date = latest_start_date(existing)
+    existing_ids = {a.get("id") for a in existing}
 
     if last_date is None:
-        print(f"Keine vorhandene {ACTIVITIES_PATH} gefunden, lade die komplette "
-              f"Strava-Historie ...")
-        new_activities = fetch_activities(access_token, after=None)
+        print("Keine vorhandene activities.json – lade die letzten 100 Aktivitaeten ...")
+        raw_list = client.get_activities(0, 100)
     else:
-        print(f"Lade Aktivitaeten neuer als {last_date.isoformat()} ...")
-        new_activities = fetch_activities(access_token, after=last_date)
+        start_str = (last_date.date() - timedelta(days=1)).isoformat()
+        end_str = date.today().isoformat()
+        print(f"Lade Aktivitaeten ab {start_str} ...")
+        raw_list = client.get_activities_by_date(start_str, end_str)
+
+    new_activities = [
+        garmin_to_internal(r)
+        for r in raw_list
+        if r.get("activityId") not in existing_ids
+    ]
 
     if not new_activities:
         print("Keine neuen Aktivitaeten gefunden.")
@@ -272,8 +204,8 @@ def compute_tss(activity):
             return round(tss, 1)
 
     # Aktivitaeten ohne Leistungsdaten (Hike, WeightTraining, Run, ...):
-    # bevorzugt Stravas Suffer Score, sonst grobe Schaetzung ueber die
-    # durchschnittliche Herzfrequenz im Verhaeltnis zur Laktatschwelle.
+    # Kein Leistungswert: bevorzugt Suffer Score (Strava-Legacy-Daten),
+    # sonst grobe Schaetzung ueber Herzfrequenz und Laktatschwelle.
     suffer_score = activity.get("suffer_score")
     if suffer_score:
         return round(suffer_score * 0.6, 1)
@@ -860,8 +792,8 @@ def plot_formkurve(history, activities, weather_forecast=None):
 
 
 def main():
-    access_token = ensure_access_token()
-    activities = sync_activities(access_token)
+    client = garmin_login()
+    activities = sync_activities(client)
 
     annotate_tss(activities)
     save_activities(activities)
