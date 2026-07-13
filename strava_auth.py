@@ -49,6 +49,12 @@ LTHR = 172  # angenommene Laktatschwelle (Herzfrequenz in bpm)
 CTL_DAYS = 42  # Zeitkonstante fuer die Fitness (Chronic Training Load)
 ATL_DAYS = 7  # Zeitkonstante fuer die Ermuedung (Acute Training Load)
 
+# Intensitätsverteilung – 3-Zonen-Modell
+HR_MAX = 190                           # maximale Herzfrequenz (bpm)
+LT1 = round(0.82 * HR_MAX)            # Aerobe Schwelle (Zone 1/2-Grenze)
+LT2 = round(0.92 * HR_MAX)            # Anaerobe Schwelle (Zone 2/3-Grenze)
+INTENSITY_SPORT_TYPES = {"Ride", "Run", "Hike"}  # auf "Ride" reduzierbar
+
 # Garmin-Session wird in diesem Ordner gecacht, damit kein erneutes
 # Login bei jedem Aufruf noetig ist.
 GARTH_HOME = os.path.join(BASE_DIR, ".garth")
@@ -193,67 +199,86 @@ def sync_activities(client):
 
 
 def sync_streams(client, activities):
-    """Laedt sekundengenaue Power-Streams fuer alle Rides von Garmin und
-    cached sie unter streams/<activity_id>.json. Bereits vorhandene Dateien
-    werden nicht erneut abgefragt."""
+    """Laedt sekundengenaue Power- und HR-Streams fuer alle Ausdaueraktivitaeten
+    (Ride, Run, Hike) von Garmin und cached sie unter streams/<activity_id>.json.
+    Dateien ohne 'heartrates'-Feld (altes Format) werden neu abgerufen."""
 
     import time as _time
 
     os.makedirs(STREAMS_DIR, exist_ok=True)
-    rides = [a for a in activities if a.get("type") == "Ride"]
-    missing = [r for r in rides
-               if not os.path.exists(os.path.join(STREAMS_DIR, f"{r['id']}.json"))]
+
+    candidates = [a for a in activities if a.get("type") in INTENSITY_SPORT_TYPES]
+
+    def needs_fetch(activity):
+        path = os.path.join(STREAMS_DIR, f"{activity['id']}.json")
+        if not os.path.exists(path):
+            return True
+        try:
+            cached = json.load(open(path, encoding="utf-8"))
+            # Re-fetch if old format (no HR field) and no permanent error marker
+            if "heartrates" not in cached and not cached.get("reason"):
+                return True
+        except Exception:
+            return True
+        return False
+
+    missing = [a for a in candidates if needs_fetch(a)]
 
     if not missing:
-        print("Alle Ride-Streams bereits gecacht.")
+        print("Alle Streams bereits gecacht (inkl. HR).")
         return
 
-    print(f"Lade Streams fuer {len(missing)} Ride(s) ...")
-    for i, ride in enumerate(missing):
-        stream_path = os.path.join(STREAMS_DIR, f"{ride['id']}.json")
-        moving_time = max(int(ride.get("moving_time") or 3600), 1)
+    print(f"Lade Streams fuer {len(missing)} Aktivitaet(en) ...")
+    for i, act in enumerate(missing):
+        stream_path = os.path.join(STREAMS_DIR, f"{act['id']}.json")
+        moving_time = max(int(act.get("moving_time") or 3600), 1)
         attempt = 0
 
         while attempt < 4:
             try:
                 detail = client.get_activity_details(
-                    ride["id"], maxchart=moving_time, maxpoly=0
+                    act["id"], maxchart=moving_time, maxpoly=0
                 )
 
-                # Power- und Timestamp-Spalte dynamisch ueber Descriptor finden.
                 descriptors = {
                     d["key"]: d["metricsIndex"]
                     for d in detail.get("metricDescriptors", [])
                 }
                 pw_idx = descriptors.get("directPower")
+                hr_idx = descriptors.get("directHeartRate")
                 ts_idx = descriptors.get("directTimestamp")
 
-                if pw_idx is None:
-                    print(f"  [{i+1}/{len(missing)}] {ride['name']}: kein Power-Sensor – uebersprungen")
-                    with open(stream_path, "w", encoding="utf-8") as f:
-                        json.dump({"has_power": False, "activity_id": ride["id"]}, f)
-                    break
-
-                watts, timestamps = [], []
+                watts, pw_ts = [], []
+                heartrates, hr_ts = [], []
                 for row in detail.get("activityDetailMetrics", []):
                     m = row["metrics"]
-                    pw = m[pw_idx]
-                    ts = m[ts_idx]
-                    if pw is not None and ts is not None:
+                    ts = m[ts_idx] if ts_idx is not None else None
+                    if ts is None:
+                        continue
+                    pw = m[pw_idx] if pw_idx is not None else None
+                    hr = m[hr_idx] if hr_idx is not None else None
+                    if pw is not None:
                         watts.append(float(pw))
-                        timestamps.append(float(ts))
+                        pw_ts.append(float(ts))
+                    if hr is not None:
+                        heartrates.append(float(hr))
+                        hr_ts.append(float(ts))
 
                 with open(stream_path, "w", encoding="utf-8") as f:
                     json.dump({
-                        "has_power": len(watts) > 0,
-                        "activity_id": ride["id"],
-                        "name": ride["name"],
-                        "start_date": ride["start_date"],
-                        "timestamps_ms": timestamps,
-                        "watts": watts,
+                        "has_power":       len(watts) > 0,
+                        "has_hr":          len(heartrates) > 0,
+                        "activity_id":     act["id"],
+                        "name":            act["name"],
+                        "start_date":      act["start_date"],
+                        "timestamps_ms":   pw_ts,       # power-aligned (backward compat)
+                        "watts":           watts,
+                        "hr_timestamps_ms": hr_ts,
+                        "heartrates":      heartrates,
                     }, f)
 
-                print(f"  [{i+1}/{len(missing)}] {ride['name']}: {len(watts)} Samples")
+                print(f"  [{i+1}/{len(missing)}] {act['name']}: "
+                      f"{len(watts)} Power / {len(heartrates)} HR Samples")
                 break
 
             except Exception as exc:
@@ -264,14 +289,14 @@ def sync_streams(client, activities):
                     _time.sleep(wait)
                     attempt += 1
                 elif "403" in msg or "404" in msg:
-                    # Strava-importierte Aktivitaeten: kein Garmin-Detail-Zugriff.
                     with open(stream_path, "w", encoding="utf-8") as f:
-                        json.dump({"has_power": False, "activity_id": ride["id"],
-                                   "reason": msg[:80]}, f)
-                    print(f"  [{i+1}/{len(missing)}] {ride['name']}: nicht zugaenglich ({msg[:40]})")
+                        json.dump({"has_power": False, "has_hr": False,
+                                   "activity_id": act["id"], "reason": msg[:80]}, f)
+                    print(f"  [{i+1}/{len(missing)}] {act['name']}: "
+                          f"nicht zugaenglich ({msg[:40]})")
                     break
                 else:
-                    print(f"  Fehler bei {ride['name']}: {exc}")
+                    print(f"  Fehler bei {act['name']}: {exc}")
                     break
 
         _time.sleep(1.5)
@@ -716,6 +741,198 @@ def plot_mmp(mmp_data):
     )
 
 
+def plot_intensity_distribution(activities):
+    """Zeitgewichtete Intensitätsverteilung nach 3-Zonen-Modell (Durchschnitts-HF).
+    Gibt (html_snippet, p1, p2, p3, skipped) zurück."""
+    from datetime import datetime
+    from collections import defaultdict
+
+    eligible = [
+        a for a in activities
+        if a.get("type") in INTENSITY_SPORT_TYPES and a.get("average_heartrate")
+    ]
+    skipped = sum(
+        1 for a in activities
+        if a.get("type") in INTENSITY_SPORT_TYPES and not a.get("average_heartrate")
+    )
+
+    if not eligible:
+        return "", 0, 0, 0, skipped
+
+    z1_min = z2_min = z3_min = 0
+    weeks = defaultdict(lambda: [0, 0, 0])
+    fallback_count = 0  # Aktivitaeten ohne HR-Stream, nutzen avg_hr
+
+    for a in eligible:
+        raw_date = a.get("start_date_local") or a.get("start_date") or ""
+        try:
+            dt = datetime.fromisoformat(raw_date[:16])
+            wk = dt.strftime("%Y-W%V")
+        except Exception:
+            wk = None
+
+        stream_path = os.path.join(STREAMS_DIR, f"{a['id']}.json")
+        hr_seconds = None
+        if os.path.exists(stream_path):
+            try:
+                s = json.load(open(stream_path, encoding="utf-8"))
+                hrs = s.get("heartrates", [])
+                tss = s.get("hr_timestamps_ms", [])
+                if hrs and tss and len(hrs) == len(tss):
+                    hr_seconds = []
+                    for j in range(len(tss)):
+                        dt_sec = (tss[j] - tss[j-1]) / 1000.0 if j > 0 else 1.0
+                        dt_sec = max(0.0, min(dt_sec, 10.0))  # Ausreisser kappen
+                        hr_seconds.append((hrs[j], dt_sec))
+            except Exception:
+                pass
+
+        if hr_seconds:
+            for hr, secs in hr_seconds:
+                mins_frac = secs / 60.0
+                if hr < LT1:
+                    z1_min += mins_frac
+                    if wk: weeks[wk][0] += mins_frac
+                elif hr < LT2:
+                    z2_min += mins_frac
+                    if wk: weeks[wk][1] += mins_frac
+                else:
+                    z3_min += mins_frac
+                    if wk: weeks[wk][2] += mins_frac
+        else:
+            # Fallback: Durchschnitts-HF × moving_time
+            fallback_count += 1
+            hr = a.get("average_heartrate", 0)
+            mins = (a.get("moving_time") or 0) / 60.0
+            if hr < LT1:
+                z1_min += mins
+                if wk: weeks[wk][0] += mins
+            elif hr < LT2:
+                z2_min += mins
+                if wk: weeks[wk][1] += mins
+            else:
+                z3_min += mins
+                if wk: weeks[wk][2] += mins
+
+    total = z1_min + z2_min + z3_min
+    if total == 0:
+        return "", 0, 0, 0, skipped
+
+    p1 = round(100 * z1_min / total)
+    p2 = round(100 * z2_min / total)
+    p3 = 100 - p1 - p2
+
+    sorted_weeks = sorted(weeks.keys())
+
+    # Gesamt-Ansicht: horizontaler Stacked-Bar
+    overall_traces = [
+        go.Bar(name="Zone 1 – Locker", orientation="h",
+               x=[z1_min], y=["Gesamtzeit"], marker_color="#2ecc71",
+               text=[f"{p1}%"], textposition="inside", textfont=dict(size=13),
+               hovertemplate=f"{z1_min} min ({p1}%)<extra>Zone 1 – Locker</extra>",
+               visible=True),
+        go.Bar(name="Zone 2 – Mittel", orientation="h",
+               x=[z2_min], y=["Gesamtzeit"], marker_color="#f1c40f",
+               text=[f"{p2}%"], textposition="inside", textfont=dict(size=13),
+               hovertemplate=f"{z2_min} min ({p2}%)<extra>Zone 2 – Mittel</extra>",
+               visible=True),
+        go.Bar(name="Zone 3 – Hart", orientation="h",
+               x=[z3_min], y=["Gesamtzeit"], marker_color="#e74c3c",
+               text=[f"{p3}%" if p3 > 0 else ""], textposition="inside",
+               textfont=dict(size=13),
+               hovertemplate=f"{z3_min} min ({p3}%)<extra>Zone 3 – Hart</extra>",
+               visible=True),
+    ]
+
+    # Wochenweise-Ansicht: vertikaler Stacked-Bar
+    weekly_traces = [
+        go.Bar(name="Zone 1 – Locker",
+               x=sorted_weeks, y=[weeks[w][0] for w in sorted_weeks],
+               marker_color="#2ecc71",
+               hovertemplate="%{y} min<extra>Zone 1 – Locker</extra>",
+               visible=False),
+        go.Bar(name="Zone 2 – Mittel",
+               x=sorted_weeks, y=[weeks[w][1] for w in sorted_weeks],
+               marker_color="#f1c40f",
+               hovertemplate="%{y} min<extra>Zone 2 – Mittel</extra>",
+               visible=False),
+        go.Bar(name="Zone 3 – Hart",
+               x=sorted_weeks, y=[weeks[w][2] for w in sorted_weeks],
+               marker_color="#e74c3c",
+               hovertemplate="%{y} min<extra>Zone 3 – Hart</extra>",
+               visible=False),
+    ]
+
+    fig = go.Figure(overall_traces + weekly_traces)
+    fig.update_layout(
+        barmode="stack",
+        template="plotly_dark",
+        paper_bgcolor="#111418",
+        plot_bgcolor="#111418",
+        height=280,
+        margin=dict(t=60, b=50, l=90, r=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="right", x=1),
+        xaxis=dict(title="Minuten", gridcolor="#2d333b"),
+        yaxis=dict(gridcolor="#2d333b"),
+        updatemenus=[dict(
+            type="buttons", direction="right",
+            x=0.0, y=1.22, xanchor="left",
+            showactive=True,
+            bgcolor="#1c2128", bordercolor="#444",
+            font=dict(color="#ddd"),
+            buttons=[
+                dict(label="Gesamt",
+                     method="update",
+                     args=[{"visible": [True, True, True, False, False, False]},
+                           {"height": 280,
+                            "xaxis": {"title": "Minuten", "gridcolor": "#2d333b"},
+                            "yaxis": {"title": "", "gridcolor": "#2d333b"}}]),
+                dict(label="Wochenweise",
+                     method="update",
+                     args=[{"visible": [False, False, False, True, True, True]},
+                           {"height": 420,
+                            "xaxis": {"title": "Kalenderwoche", "gridcolor": "#2d333b"},
+                            "yaxis": {"title": "Minuten", "gridcolor": "#2d333b"}}]),
+            ],
+        )],
+    )
+
+    # Interpretationstext
+    if p3 == 0 and p2 > 25:
+        verdict = (f"Hoher Mittelanteil ({p2}%), keine messbaren Belastungsspitzen in Z3. "
+                   f"Typisch für durchschnittliche HF als Zonenmaß – Intervalle werden "
+                   f"durch den Gesamtdurchschnitt unsichtbar.")
+    elif p1 >= 70 and p3 >= 10:
+        verdict = f"Gut polarisiert: viel Grundlage ({p1}%) mit klarem Hartanteil ({p3}%)."
+    elif p1 >= 70:
+        verdict = f"Viel Grundlagenarbeit ({p1}%), kaum Intensität ({p3}%)."
+    else:
+        verdict = f"Gemischte Verteilung ohne klares Muster."
+
+    skipped_note = f" {skipped} Aktivität(en) ohne HF-Daten übersprungen." if skipped else ""
+    fallback_note = (f" {fallback_count} Aktivität(en) ohne HR-Stream nutzen Durchschnitts-HF"
+                     f" als Näherung." if fallback_count else "")
+
+    disclaimer = (
+        '<p class="status-text" style="font-size:11px;color:#6e7a8a;margin-bottom:4px;">'
+        f'Zonenverteilung sekundengenau aus HR-Zeitreihe (LT1={LT1} bpm, LT2={LT2} bpm, '
+        f'HFmax={HR_MAX}).{fallback_note}'
+        '</p>'
+    )
+    interp = (
+        '<p class="status-text" style="font-size:13px;color:#aaa;margin-top:6px;">'
+        f'Aktuell {p1}% locker / {p2}% mittel / {p3}% hart – {verdict}{skipped_note}'
+        '</p>'
+    )
+
+    return (
+        disclaimer
+        + fig.to_html(full_html=False, include_plotlyjs=False, div_id="intensity-chart")
+        + interp,
+        p1, p2, p3, skipped,
+    )
+
+
 def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None):
     """Erstellt ein interaktives Dashboard der Formkurve (CTL, ATL, TSB)
     inkl. Coach-Analyse als 'formkurve.html'."""
@@ -951,6 +1168,8 @@ def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None):
     day_cards_html = "\n".join(day_cards)
     chart_html = fig.to_html(full_html=False, include_plotlyjs="cdn", div_id="formkurve-chart")
 
+    ftp_est = (mmp_data.get("ftp_42") or mmp_data.get("ftp_season")) if mmp_data else None
+
     mmp_chart = plot_mmp(mmp_data)
     if mmp_chart:
         mmp_section = (
@@ -960,6 +1179,18 @@ def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None):
         )
     else:
         mmp_section = ""
+
+    intensity_html, p1, p2, p3, skipped_hr = plot_intensity_distribution(activities)
+    if intensity_html:
+        intensity_section = (
+            "<h2>Intensitätsverteilung (Polarisierung)</h2>\n"
+            + intensity_html
+            + "\n    <hr>"
+        )
+        print(f"Intensitätsverteilung: {p1}% locker / {p2}% mittel / {p3}% hart "
+              f"({skipped_hr} Akt. ohne HF übersprungen)")
+    else:
+        intensity_section = ""
 
     html = f"""<!DOCTYPE html>
 <html lang="de">
@@ -973,6 +1204,19 @@ def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None):
 </style>
 </head>
 <body>
+    <div class="ftp-header">
+        <div class="ftp-block">
+            <div class="ftp-label">FTP konfiguriert</div>
+            <div class="ftp-value">{FTP} <span class="ftp-unit">W</span></div>
+            <div class="ftp-sub">Basis für TSS-Berechnung</div>
+        </div>
+        <div class="ftp-divider"></div>
+        <div class="ftp-block">
+            <div class="ftp-label">FTP-Schätzung (MMP 20 min)</div>
+            <div class="ftp-value{' ftp-lower' if ftp_est and ftp_est < FTP else ''}">{ftp_est if ftp_est else "–"} <span class="ftp-unit">{"W" if ftp_est else ""}</span></div>
+            <div class="ftp-sub">95 % des 20-min-Bestwerts aus {mmp_data['count_season'] if mmp_data else 0} Ride(s)</div>
+        </div>
+    </div>
     <div class="highlight-box" id="optimalWindowBox">Berechne optimales Trainingsfenster ...</div>
     <div class="recommendation-box{' acwr-warning' if recommendation['acwr'] > 1.5 else ''}">
         <h3>Coach-Empfehlung für deine nächste Einheit</h3>
@@ -1009,6 +1253,7 @@ def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None):
 
     <hr>
 {mmp_section}
+{intensity_section}
     <h2>Wochenplanung (Vorschau naechste 7 Tage)</h2>
     <p class="status-text">
         Stelle fuer jeden Tag der kommenden Woche die geplante Dauer und

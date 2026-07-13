@@ -63,6 +63,18 @@ Bei jedem Lauf wird eine Trainings-Formkurve nach dem Banister-Modell berechnet:
 - **TSB (Form)**: `CTL - ATL`.
 - **ACWR**: `ATL / CTL` – Verhältnis akuter zu chronischer Belastung.
 
+### FTP-Anzeige
+
+Ganz oben im Dashboard zwei Werte nebeneinander:
+
+- **FTP konfiguriert** (blau): die in `strava_auth.py` gesetzte Konstante `FTP`,
+  Basis für alle TSS-Berechnungen.
+- **FTP-Schätzung MMP** (gelb, wenn niedriger): 95 % des 20-min-Bestwerts aus
+  der Power-Duration-Kurve. Zeigt, ob der konfigurierte Wert realistisch ist.
+
+Um den FTP anzupassen, genügt eine Änderung von `FTP = 266` in `strava_auth.py`
+– beim nächsten Lauf werden alle TSS-Werte neu berechnet.
+
 ### Power-Duration-Kurve (Mean Maximal Power)
 
 Für Rides mit Leistungsmesser wird eine MMP-Kurve berechnet und im Dashboard
@@ -106,6 +118,12 @@ Datei für Google Drive). Enthalten sind:
   der Woche (gewichtet nach Temp/Regen/Wind) und motivierendem TSB-Tipp.
 - **Wochentags-Filter**: Mo–So-Buttons zum Ein-/Ausblenden einzelner
   Tages-Karten (ausgeblendete Werte fließen weiterhin in die Simulation ein).
+- **Intensitätsverteilung (Polarisierung)**: Sekundengenaue Zonenverteilung
+  (Z1 locker / Z2 mittel / Z3 hart) auf Basis der HR-Zeitreihe aus den Stream-
+  Caches. Zwei Ansichten: Gesamtverteilung (horizontaler Stacked-Bar) und
+  Wochenweise (gestapelte Balken je Kalenderwoche). Umschalter oben links im
+  Chart. Aktivitäten ohne HR-Stream fallen auf Durchschnitts-HF zurück.
+  Schwellen: LT1 = 82 % HFmax, LT2 = 92 % HFmax (in `strava_auth.py` editierbar).
 - **Routen-Planer**: Einklappbares Accordion pro Tages-Karte. Leaflet-Karte
   (Dark-Mode-Tiles, lazy initialisiert), Live-Radius-Kreis aus Dauer/Leistung,
   Wendepunkt-Vorschläge aus dem Linzer Umland. Optional: echte Strecke +
