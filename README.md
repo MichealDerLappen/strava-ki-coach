@@ -63,6 +63,21 @@ Bei jedem Lauf wird eine Trainings-Formkurve nach dem Banister-Modell berechnet:
 - **TSB (Form)**: `CTL - ATL`.
 - **ACWR**: `ATL / CTL` – Verhältnis akuter zu chronischer Belastung.
 
+### Power-Duration-Kurve (Mean Maximal Power)
+
+Für Rides mit Leistungsmesser wird eine MMP-Kurve berechnet und im Dashboard
+angezeigt. Sie zeigt die beste mittlere Leistung (W) über alle gängigen Dauer-
+stufen (5 s bis 60 min) auf einer logarithmischen Zeitachse:
+
+- **Blaue Linie**: Bestwerte der letzten 42 Tage.
+- **Gepunktete graue Linie**: Saisonbestwert (alle gecachten Rides).
+- **FTP-Annotation**: 95 % des 20-min-Bestwerts als automatische FTP-Schätzung.
+
+Die Hochauflösungs-Leistungsdaten (Garmin-Detail-API, ~1 Hz) werden pro Ride
+in `streams/<id>.json` gecacht. Strava-importierte Aktivitäten in Garmin Connect
+sind über die API nicht zugänglich – nur native Garmin-Aktivitäten (am Gerät
+aufgezeichnet und direkt hochgeladen) liefern Streams.
+
 ### Interaktives Dashboard `formkurve.html`
 
 CSS und JavaScript liegen als eigene Dateien unter `templates/dashboard.css`

@@ -35,6 +35,7 @@ TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 ENV_PATH = os.path.join(BASE_DIR, ".env")
 ACTIVITIES_PATH = os.path.join(BASE_DIR, "activities.json")
 FORMKURVE_PATH = os.path.join(BASE_DIR, "formkurve.html")
+STREAMS_DIR = os.path.join(BASE_DIR, "streams")
 DRIVE_FILENAME = "activities.json"
 
 # Open-Meteo: Koordinaten fuer die Wettervorhersage (Linz)
@@ -189,6 +190,166 @@ def sync_activities(client):
     save_activities(updated)
     print(f"{len(new_activities)} neue Aktivitaet(en) gespeichert. Insgesamt {len(updated)}.")
     return updated
+
+
+def sync_streams(client, activities):
+    """Laedt sekundengenaue Power-Streams fuer alle Rides von Garmin und
+    cached sie unter streams/<activity_id>.json. Bereits vorhandene Dateien
+    werden nicht erneut abgefragt."""
+
+    import time as _time
+
+    os.makedirs(STREAMS_DIR, exist_ok=True)
+    rides = [a for a in activities if a.get("type") == "Ride"]
+    missing = [r for r in rides
+               if not os.path.exists(os.path.join(STREAMS_DIR, f"{r['id']}.json"))]
+
+    if not missing:
+        print("Alle Ride-Streams bereits gecacht.")
+        return
+
+    print(f"Lade Streams fuer {len(missing)} Ride(s) ...")
+    for i, ride in enumerate(missing):
+        stream_path = os.path.join(STREAMS_DIR, f"{ride['id']}.json")
+        moving_time = max(int(ride.get("moving_time") or 3600), 1)
+        attempt = 0
+
+        while attempt < 4:
+            try:
+                detail = client.get_activity_details(
+                    ride["id"], maxchart=moving_time, maxpoly=0
+                )
+
+                # Power- und Timestamp-Spalte dynamisch ueber Descriptor finden.
+                descriptors = {
+                    d["key"]: d["metricsIndex"]
+                    for d in detail.get("metricDescriptors", [])
+                }
+                pw_idx = descriptors.get("directPower")
+                ts_idx = descriptors.get("directTimestamp")
+
+                if pw_idx is None:
+                    print(f"  [{i+1}/{len(missing)}] {ride['name']}: kein Power-Sensor – uebersprungen")
+                    with open(stream_path, "w", encoding="utf-8") as f:
+                        json.dump({"has_power": False, "activity_id": ride["id"]}, f)
+                    break
+
+                watts, timestamps = [], []
+                for row in detail.get("activityDetailMetrics", []):
+                    m = row["metrics"]
+                    pw = m[pw_idx]
+                    ts = m[ts_idx]
+                    if pw is not None and ts is not None:
+                        watts.append(float(pw))
+                        timestamps.append(float(ts))
+
+                with open(stream_path, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "has_power": len(watts) > 0,
+                        "activity_id": ride["id"],
+                        "name": ride["name"],
+                        "start_date": ride["start_date"],
+                        "timestamps_ms": timestamps,
+                        "watts": watts,
+                    }, f)
+
+                print(f"  [{i+1}/{len(missing)}] {ride['name']}: {len(watts)} Samples")
+                break
+
+            except Exception as exc:
+                msg = str(exc)
+                if "429" in msg or "TooManyRequests" in msg.lower():
+                    wait = 30 * (2 ** attempt)
+                    print(f"  Rate-limit – warte {wait}s ...")
+                    _time.sleep(wait)
+                    attempt += 1
+                elif "403" in msg or "404" in msg:
+                    # Strava-importierte Aktivitaeten: kein Garmin-Detail-Zugriff.
+                    with open(stream_path, "w", encoding="utf-8") as f:
+                        json.dump({"has_power": False, "activity_id": ride["id"],
+                                   "reason": msg[:80]}, f)
+                    print(f"  [{i+1}/{len(missing)}] {ride['name']}: nicht zugaenglich ({msg[:40]})")
+                    break
+                else:
+                    print(f"  Fehler bei {ride['name']}: {exc}")
+                    break
+
+        _time.sleep(1.5)
+
+
+MMP_DURATIONS = [5, 15, 30, 60, 120, 300, 480, 600, 1200, 1800, 3600]
+
+
+def compute_mmp_curves():
+    """Berechnet Mean Maximal Power aus allen gecachten Streams.
+    Gibt zwei Kurven zurueck: 'Letzte 42 Tage' und 'Saisonbestwert'."""
+
+    try:
+        import numpy as np
+    except ImportError:
+        os.system("pip install numpy")
+        import numpy as np
+
+    if not os.path.exists(STREAMS_DIR):
+        return None
+
+    cutoff_42 = (date.today() - timedelta(days=42)).isoformat()
+    mmp_season = {d: 0.0 for d in MMP_DURATIONS}
+    mmp_42 = {d: 0.0 for d in MMP_DURATIONS}
+    count_season = count_42 = 0
+
+    for fname in sorted(os.listdir(STREAMS_DIR)):
+        if not fname.endswith(".json"):
+            continue
+        with open(os.path.join(STREAMS_DIR, fname), encoding="utf-8") as f:
+            stream = json.load(f)
+
+        if not stream.get("has_power"):
+            continue
+
+        ts = np.array(stream["timestamps_ms"]) / 1000.0
+        w  = np.array(stream["watts"])
+        if len(ts) < 10:
+            continue
+
+        # Auf 1 Hz normalisieren via linearer Interpolation
+        t_1hz = np.arange(ts[0], ts[-1], 1.0)
+        w_1hz = np.interp(t_1hz, ts, w)
+
+        # Rollendes Mittel via Cumsum – O(n) pro Dauer
+        cs = np.concatenate(([0.0], np.cumsum(w_1hz)))
+        n  = len(w_1hz)
+
+        start_date = stream.get("start_date", "")[:10]
+        is_42 = start_date >= cutoff_42
+        count_season += 1
+        if is_42:
+            count_42 += 1
+
+        for d in MMP_DURATIONS:
+            if d > n:
+                continue
+            best = float(((cs[d:] - cs[:-d]) / d).max())
+            if best > mmp_season[d]:
+                mmp_season[d] = best
+            if is_42 and best > mmp_42[d]:
+                mmp_42[d] = best
+
+    if count_season == 0:
+        return None
+
+    ftp_season = round(0.95 * mmp_season[1200]) if mmp_season.get(1200) else None
+    ftp_42     = round(0.95 * mmp_42[1200])     if mmp_42.get(1200)     else None
+
+    return {
+        "durations":      MMP_DURATIONS,
+        "mmp_season":     [mmp_season[d] or None for d in MMP_DURATIONS],
+        "mmp_42":         [mmp_42[d] or None     for d in MMP_DURATIONS],
+        "ftp_season":     ftp_season,
+        "ftp_42":         ftp_42,
+        "count_season":   count_season,
+        "count_42":       count_42,
+    }
 
 
 def compute_tss(activity):
@@ -463,7 +624,99 @@ def fetch_weather_forecast():
         return []
 
 
-def plot_formkurve(history, activities, weather_forecast=None):
+def plot_mmp(mmp_data):
+    """Erzeugt einen Plotly-Chart der Power-Duration-Kurve und gibt ihn als
+    HTML-Snippet zurueck. Gibt einen leeren String zurueck wenn keine Daten."""
+
+    if not mmp_data:
+        return ""
+
+    dur  = mmp_data["durations"]
+    s42  = mmp_data["mmp_42"]
+    sall = mmp_data["mmp_season"]
+
+    def dur_label(d):
+        if d < 60:
+            return f"{d}s"
+        return f"{d // 60}min" if d < 3600 else "60min"
+
+    tick_vals  = [5, 30, 60, 300, 1200, 3600]
+    tick_texts = ["5s", "30s", "1min", "5min", "20min", "60min"]
+
+    traces = []
+
+    # Saisonbestwert (gedämpftes Grau) zuerst, damit blau darüber liegt
+    valid_all = [(d, v) for d, v in zip(dur, sall) if v]
+    if valid_all:
+        traces.append(go.Scatter(
+            x=[d for d, _ in valid_all],
+            y=[v for _, v in valid_all],
+            mode="lines+markers",
+            name="Saisonbestwert",
+            line=dict(color="#6e7a8a", width=2, dash="dot"),
+            marker=dict(size=6),
+            hovertemplate="%{y:.0f} W @ %{text}<extra>Saisonbestwert</extra>",
+            text=[dur_label(d) for d, _ in valid_all],
+        ))
+
+    # Letzte 42 Tage (blau)
+    valid_42 = [(d, v) for d, v in zip(dur, s42) if v]
+    if valid_42:
+        traces.append(go.Scatter(
+            x=[d for d, _ in valid_42],
+            y=[v for _, v in valid_42],
+            mode="lines+markers",
+            name="Letzte 42 Tage",
+            line=dict(color="#3498db", width=2.5),
+            marker=dict(size=7, color="#3498db"),
+            hovertemplate="%{y:.0f} W @ %{text}<extra>Letzte 42 Tage</extra>",
+            text=[dur_label(d) for d, _ in valid_42],
+        ))
+
+    annotations = []
+    ftp = mmp_data.get("ftp_42") or mmp_data.get("ftp_season")
+    mmp_20 = next((v for d, v in zip(dur, s42) if d == 1200 and v), None) or \
+             next((v for d, v in zip(dur, sall) if d == 1200 and v), None)
+    if mmp_20 and ftp:
+        annotations.append(dict(
+            x=1200, y=mmp_20,
+            text=f"<b>FTP ≈ {ftp} W</b>",
+            showarrow=True, arrowhead=2, arrowcolor="#f1c40f",
+            font=dict(color="#f1c40f", size=13),
+            bgcolor="#1c2128", bordercolor="#f1c40f", borderwidth=1,
+            ax=40, ay=-35,
+        ))
+
+    fig = go.Figure(traces)
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#111418",
+        plot_bgcolor="#111418",
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(t=60, b=60),
+        height=420,
+        annotations=annotations,
+        xaxis=dict(
+            type="log",
+            tickvals=tick_vals,
+            ticktext=tick_texts,
+            title="Dauer",
+            gridcolor="#2d333b",
+        ),
+        yaxis=dict(title="Watt", gridcolor="#2d333b"),
+    )
+
+    note = (f"Basiert auf {mmp_data['count_42']} Ride(s) der letzten 42 Tage "
+            f"/ {mmp_data['count_season']} Ride(s) gesamt mit Power-Meter.")
+
+    return (
+        fig.to_html(full_html=False, include_plotlyjs=False, div_id="mmp-chart")
+        + f'<p class="status-text" style="font-size:13px;color:#6e7a8a;">{note}</p>'
+    )
+
+
+def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None):
     """Erstellt ein interaktives Dashboard der Formkurve (CTL, ATL, TSB)
     inkl. Coach-Analyse als 'formkurve.html'."""
 
@@ -698,6 +951,16 @@ def plot_formkurve(history, activities, weather_forecast=None):
     day_cards_html = "\n".join(day_cards)
     chart_html = fig.to_html(full_html=False, include_plotlyjs="cdn", div_id="formkurve-chart")
 
+    mmp_chart = plot_mmp(mmp_data)
+    if mmp_chart:
+        mmp_section = (
+            "<h2>Power-Duration-Kurve (Mean Maximal Power)</h2>\n"
+            + mmp_chart
+            + "\n    <hr>"
+        )
+    else:
+        mmp_section = ""
+
     html = f"""<!DOCTYPE html>
 <html lang="de">
 <head>
@@ -745,6 +1008,7 @@ def plot_formkurve(history, activities, weather_forecast=None):
     <p class="status-text">{analysis['trend_status']}</p>
 
     <hr>
+{mmp_section}
     <h2>Wochenplanung (Vorschau naechste 7 Tage)</h2>
     <p class="status-text">
         Stelle fuer jeden Tag der kommenden Woche die geplante Dauer und
@@ -794,6 +1058,7 @@ def plot_formkurve(history, activities, weather_forecast=None):
 def main():
     client = garmin_login()
     activities = sync_activities(client)
+    sync_streams(client, activities)
 
     annotate_tss(activities)
     save_activities(activities)
@@ -801,8 +1066,14 @@ def main():
     history = compute_form_curve(activities)
     print_form_summary(history)
 
+    mmp_data = compute_mmp_curves()
+    if mmp_data:
+        ftp_est = mmp_data.get("ftp_42") or mmp_data.get("ftp_season")
+        print(f"MMP-Kurve: {mmp_data['count_42']} Rides (42d) / "
+              f"{mmp_data['count_season']} gesamt – FTP-Schaetzung: {ftp_est} W")
+
     weather_forecast = fetch_weather_forecast()
-    plot_formkurve(history, activities, weather_forecast)
+    plot_formkurve(history, activities, weather_forecast, mmp_data=mmp_data)
 
     upload_file(ACTIVITIES_PATH, DRIVE_FILENAME)
     upload_file(FORMKURVE_PATH, "formkurve.html", mimetype="text/html")
