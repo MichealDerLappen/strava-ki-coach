@@ -9,3 +9,4 @@ credentials.json
 drive_token.json
 .garth/
 streams/
+launchagent.log

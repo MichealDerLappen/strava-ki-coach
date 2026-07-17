@@ -130,6 +130,35 @@ Datei für Google Drive). Enthalten sind:
   Höhenmeter via OpenRouteService ("🗺️ Echte Route laden"), automatische
   Neu-Berechnung bei Slider-Änderung.
 
+## Automatischer täglicher Run (macOS LaunchAgent)
+
+Das Script läuft täglich um 06:00 Uhr automatisch via macOS LaunchAgent.
+Die Plist-Datei liegt unter:
+
+```
+~/Library/LaunchAgents/com.strava-ki-coach.daily.plist
+```
+
+**Einmalige Einrichtung** (nach Clone auf neuem Mac):
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.strava-ki-coach.daily.plist
+```
+
+**Log** (Ausgabe des letzten Runs):
+
+```bash
+tail -f ~/strava-ki-coach/launchagent.log
+```
+
+**Deaktivieren:**
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.strava-ki-coach.daily.plist
+```
+
+Wenn der Mac um 06:00 schläft, holt macOS den Run nach dem Aufwachen nach.
+
 ## Google Drive Upload
 
 Nach der Synchronisation werden `activities.json` und `formkurve.html`
