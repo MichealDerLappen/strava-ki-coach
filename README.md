@@ -55,7 +55,7 @@ Anschließend wird die Formkurve berechnet und `formkurve.html` generiert.
 
 Bei jedem Lauf wird eine Trainings-Formkurve nach dem Banister-Modell berechnet:
 
-- **TSS pro Aktivität**: Für Radfahrten aus Normalized Power und FTP (266 W).
+- **TSS pro Aktivität**: Für Radfahrten aus Normalized Power und FTP (250 W).
   Für Aktivitäten ohne Leistungsdaten aus Herzfrequenz vs. Laktatschwelle
   (172 bpm). Für ältere Strava-Exporte aus dem Suffer Score.
 - **CTL (Fitness)**: exponentiell gewichteter gleitender Durchschnitt über 42 Tage.

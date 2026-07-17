@@ -44,7 +44,7 @@ WEATHER_LONGITUDE = 14.2858
 WEATHER_API_URL = "https://api.open-meteo.com/v1/forecast"
 
 # Banister-Modell: Grundlagen fuer die Formkurven-Berechnung
-FTP = 266  # Functional Threshold Power in Watt
+FTP = 250  # Functional Threshold Power in Watt
 LTHR = 172  # angenommene Laktatschwelle (Herzfrequenz in bpm)
 CTL_DAYS = 42  # Zeitkonstante fuer die Fitness (Chronic Training Load)
 ATL_DAYS = 7  # Zeitkonstante fuer die Ermuedung (Acute Training Load)
