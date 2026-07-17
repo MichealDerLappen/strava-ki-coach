@@ -215,8 +215,8 @@ def sync_streams(client, activities):
             return True
         try:
             cached = json.load(open(path, encoding="utf-8"))
-            # Re-fetch if old format (no HR field) and no permanent error marker
-            if "heartrates" not in cached and not cached.get("reason"):
+            # Re-fetch if old format missing HR or GPS fields
+            if ("heartrates" not in cached or "latitudes" not in cached) and not cached.get("reason"):
                 return True
         except Exception:
             return True
@@ -244,41 +244,61 @@ def sync_streams(client, activities):
                     d["key"]: d["metricsIndex"]
                     for d in detail.get("metricDescriptors", [])
                 }
-                pw_idx = descriptors.get("directPower")
-                hr_idx = descriptors.get("directHeartRate")
-                ts_idx = descriptors.get("directTimestamp")
+                pw_idx  = descriptors.get("directPower")
+                hr_idx  = descriptors.get("directHeartRate")
+                ts_idx  = descriptors.get("directTimestamp")
+                lat_idx = descriptors.get("directLatitude")
+                lon_idx = descriptors.get("directLongitude")
+                ele_idx = descriptors.get("directElevation")
 
                 watts, pw_ts = [], []
                 heartrates, hr_ts = [], []
+                latitudes, longitudes, elevations, gps_ts = [], [], [], []
+
                 for row in detail.get("activityDetailMetrics", []):
                     m = row["metrics"]
                     ts = m[ts_idx] if ts_idx is not None else None
                     if ts is None:
                         continue
-                    pw = m[pw_idx] if pw_idx is not None else None
-                    hr = m[hr_idx] if hr_idx is not None else None
+                    ts = float(ts)
+
+                    pw  = m[pw_idx]  if pw_idx  is not None else None
+                    hr  = m[hr_idx]  if hr_idx  is not None else None
+                    lat = m[lat_idx] if lat_idx is not None else None
+                    lon = m[lon_idx] if lon_idx is not None else None
+                    ele = m[ele_idx] if ele_idx is not None else None
+
                     if pw is not None:
-                        watts.append(float(pw))
-                        pw_ts.append(float(ts))
+                        watts.append(float(pw)); pw_ts.append(ts)
                     if hr is not None:
-                        heartrates.append(float(hr))
-                        hr_ts.append(float(ts))
+                        heartrates.append(float(hr)); hr_ts.append(ts)
+                    if lat is not None and lon is not None:
+                        latitudes.append(float(lat))
+                        longitudes.append(float(lon))
+                        gps_ts.append(ts)
+                        if ele is not None:
+                            elevations.append(float(ele))
 
                 with open(stream_path, "w", encoding="utf-8") as f:
                     json.dump({
-                        "has_power":       len(watts) > 0,
-                        "has_hr":          len(heartrates) > 0,
-                        "activity_id":     act["id"],
-                        "name":            act["name"],
-                        "start_date":      act["start_date"],
-                        "timestamps_ms":   pw_ts,       # power-aligned (backward compat)
-                        "watts":           watts,
+                        "has_power":        len(watts) > 0,
+                        "has_hr":           len(heartrates) > 0,
+                        "has_gps":          len(latitudes) > 0,
+                        "activity_id":      act["id"],
+                        "name":             act["name"],
+                        "start_date":       act["start_date"],
+                        "timestamps_ms":    pw_ts,
+                        "watts":            watts,
                         "hr_timestamps_ms": hr_ts,
-                        "heartrates":      heartrates,
+                        "heartrates":       heartrates,
+                        "gps_timestamps_ms": gps_ts,
+                        "latitudes":        latitudes,
+                        "longitudes":       longitudes,
+                        "elevations":       elevations,
                     }, f)
 
                 print(f"  [{i+1}/{len(missing)}] {act['name']}: "
-                      f"{len(watts)} Power / {len(heartrates)} HR Samples")
+                      f"{len(watts)}W / {len(heartrates)}HR / {len(latitudes)}GPS Samples")
                 break
 
             except Exception as exc:
@@ -1088,7 +1108,6 @@ def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None):
             .replace("__CTL_TODAY__", str(analysis["ctl"]))
             .replace("__ATL_TODAY__", str(analysis["atl"]))
             .replace("__WEATHER_FORECAST_JSON__", weather_json)
-            .replace("__ORS_API_KEY__", ORS_API_KEY)
         )
 
     # Eine Karte mit zwei Slidern (Dauer & Leistung) fuer jeden der naechsten 7 Tage.
@@ -1152,18 +1171,8 @@ def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None):
                     <span class="compact-value" id="powerValue{day}">180 W</span>
                 </div>
             </div>
-            <div class="day-tss">TSS: <span id="tssValue{day}">0.0</span></div>{warnings_html}
-            <details class="route-planner" data-day="{day}">
-                <summary>🗺️ Routen-Planer</summary>
-                <div class="map" id="map{day}"></div>
-                <div class="route-info">
-                    <div class="route-target" id="routeTargetValue{day}"></div>
-                    <div class="route-distance">Geschaetzte Distanz: <span id="distanceValue{day}">0.0 km</span></div>
-                    <div class="route-waypoints">Moegliche Wendepunkte: <span id="waypointsValue{day}">-</span></div>
-                </div>
-                <button class="route-btn" id="routeBtn{day}" onclick="loadRealRoute({day})">🗺️ Echte Route laden</button>
-                <div class="route-elevation">Echte Hoehenmeter: <span id="elevationValue{day}">-</span></div>
-            </details>
+            <div class="day-tss">TSS: <span id="tssValue{day}">0.0</span></div>
+            <div class="training-suggestion" id="trainingSuggestion{day}"></div>{warnings_html}
         </div>""")
     day_cards_html = "\n".join(day_cards)
     chart_html = fig.to_html(full_html=False, include_plotlyjs="cdn", div_id="formkurve-chart")
@@ -1197,8 +1206,6 @@ def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None):
 <head>
 <meta charset="utf-8">
 <title>Formkurve</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 {dashboard_css}
 </style>

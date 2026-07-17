@@ -262,95 +262,6 @@
         margin-bottom: 10px;
         color: #e6e6e6;
     }
-    .route-planner {
-        margin-top: 14px;
-        border-top: 1px solid #2d333b;
-        padding-top: 10px;
-    }
-    .route-planner summary {
-        cursor: pointer;
-        font-size: 13px;
-        font-weight: 600;
-        color: #9aa4af;
-        list-style: none;
-    }
-    .route-planner summary::-webkit-details-marker {
-        display: none;
-    }
-    .route-planner summary::after {
-        content: "▾";
-        float: right;
-        transition: transform 0.15s ease;
-    }
-    .route-planner[open] summary::after {
-        transform: rotate(180deg);
-    }
-    .route-planner summary:hover {
-        color: #e6e6e6;
-    }
-    .route-planner[open] summary {
-        color: #e6e6e6;
-        margin-bottom: 10px;
-    }
-    .map {
-        height: 180px;
-        width: 100%;
-        border-radius: 8px;
-        margin-bottom: 10px;
-        background-color: #2d333b;
-    }
-    .route-info {
-        font-size: 12px;
-        color: #9aa4af;
-        margin-bottom: 10px;
-        line-height: 1.6;
-    }
-    .route-target {
-        font-weight: 600;
-        color: #39ff14;
-        font-size: 13px;
-    }
-    .route-distance {
-        font-weight: 600;
-        color: #e6e6e6;
-        font-size: 14px;
-    }
-    .route-waypoints span {
-        color: #3498db;
-        font-weight: 600;
-    }
-    .route-btn {
-        display: block;
-        width: 100%;
-        margin-top: 12px;
-        background-color: #1c2128;
-        color: #9aa4af;
-        border: 1px solid #2d333b;
-        border-radius: 8px;
-        padding: 8px 12px;
-        font-size: 13px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.15s ease-in-out;
-    }
-    .route-btn:hover {
-        border-color: #39ff14;
-        color: #e6e6e6;
-    }
-    .route-btn:disabled {
-        opacity: 0.6;
-        cursor: wait;
-    }
-    .route-elevation {
-        margin-top: 8px;
-        font-size: 12px;
-        color: #9aa4af;
-        text-align: right;
-    }
-    .route-elevation span {
-        color: #39ff14;
-        font-weight: 600;
-    }
     .day-weather {
         display: flex;
         align-items: center;
@@ -481,4 +392,25 @@
         font-size: 16px;
         line-height: 1.6;
         color: #cfd6dd;
+    }
+    .training-suggestion {
+        margin-top: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+    .ts-badge {
+        display: inline-block;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 3px 10px;
+        border-radius: 20px;
+        border: 1px solid;
+        letter-spacing: 0.03em;
+        width: fit-content;
+    }
+    .ts-detail {
+        font-size: 11px;
+        color: #6e7a8a;
+        padding-left: 2px;
     }

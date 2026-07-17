@@ -10,222 +10,74 @@
         // Wettervorhersage fuer die naechsten 7 Tage (Index 0 = Tag 1 / morgen).
         const WEATHER_FORECAST = __WEATHER_FORECAST_JSON__;
 
-        // Routen-Planer: Karten zentriert auf den Linzer Hauptplatz.
-        const LINZ_HAUPTPLATZ = [48.3061, 14.2861];
-        const ROUTE_DESTINATIONS = [
-            { name: "Traun", distance: 10 },
-            { name: "Ottensheim", distance: 10 },
-            { name: "Gallneukirchen", distance: 10 },
-            { name: "Enns", distance: 20 },
-            { name: "Eferding", distance: 20 },
-            { name: "Pregarten", distance: 20 },
-            { name: "Wels", distance: 30 },
-            { name: "Bad Leonfelden", distance: 30 },
-            { name: "Amstetten", distance: 30 },
-            { name: "Freistadt", distance: 40 },
-            { name: "Steyr", distance: 45 },
-            { name: "Gmunden", distance: 50 },
-            { name: "Passau", distance: 55 },
-        ];
+        // Trainingstyp-Empfehlung pro Tag basierend auf TSB-Prognose,
+        // Wochentag (0=Mo … 6=So) und Wetter.
+        function suggestTraining(day, tsb, weekday, weather) {
+            const rain   = weather ? weather.precip_prob : 0;
+            const wind   = weather ? weather.wind_speed  : 0;
+            const indoor = rain > 60;
 
-        // OpenRouteService: API-Key fuer echte Routen- und Hoehenmeter-Abfragen.
-        const ORS_API_KEY = "__ORS_API_KEY__";
+            let type, color, icon, detail;
 
-        // Vier Richtungs-Ziele rund um Linz, je nach Wochentag rotierend gewaehlt.
-        const ROUTE_DIRECTIONS = [
-            { name: "Bad Leonfelden", coords: [48.5167, 14.2833] },  // Norden / Muehlviertel
-            { name: "Enns", coords: [48.2192, 14.4836] },            // Osten
-            { name: "Neuhofen an der Krems", coords: [48.1667, 14.2333] },  // Sueden
-            { name: "Eferding", coords: [48.3094, 13.8531] },        // Westen
-        ];
-
-        const routeMaps = {};
-        const routeCircles = {};
-        const routeLayers = {};
-        const routeLoaded = {};
-        const routeLoading = {};
-        const routeReloadTimers = {};
-
-        // Die Karten werden erst beim ersten Aufklappen des Routen-Planer-
-        // Accordions erzeugt, da Leaflet eine sichtbare Container-Groesse
-        // benoetigt, um sich korrekt zu initialisieren.
-        function initRouteMap(day) {
-            if (routeMaps[day]) {
-                return routeMaps[day];
+            if (tsb < -25) {
+                type   = "Ruhetag";
+                icon   = "😴";
+                color  = "#e74c3c";
+                detail = "Körper erholen lassen – kein Training heute.";
+            } else if (tsb < -12) {
+                type   = indoor ? "Lockeres Indoor" : "Grundlage locker";
+                icon   = indoor ? "🏠" : "🟢";
+                color  = "#2ecc71";
+                detail = indoor
+                    ? "Regen – Rolle oder Kraft statt Straße."
+                    : "Z1-Fahrt, niedrige HF, kein Druck.";
+            } else if (tsb < 0) {
+                if (weekday === 4 /* Fr */ || weekday === 5 /* Sa */ ) {
+                    type   = indoor ? "Sweet Spot Indoor" : "Sweet Spot";
+                    icon   = "🎯";
+                    color  = "#f1c40f";
+                    detail = "Moderate Intensität, 88–93 % FTP, kontrolliert.";
+                } else {
+                    type   = indoor ? "Tempo Indoor" : "Tempo";
+                    icon   = "⚡";
+                    color  = "#f1c40f";
+                    detail = "Schwellennahe Arbeit, 95–105 % FTP.";
+                }
+            } else if (tsb < 12) {
+                if (weekday === 5 /* Sa */ || weekday === 6 /* So */) {
+                    type   = indoor ? "Sweet Spot Indoor" : "Long Ride";
+                    icon   = indoor ? "🎯" : "🚴";
+                    color  = "#3498db";
+                    detail = indoor
+                        ? "Wetter schlecht – lieber Rolle."
+                        : "Langer Ausdauer-Ride, ruhiges Tempo, Umfang nutzen.";
+                } else {
+                    type   = wind > 25 ? "Intervalle (Gegenwind nutzen)" : "Intervalle";
+                    icon   = "🔥";
+                    color  = "#e67e22";
+                    detail = "VO2max oder anaerobe Intervalle, kurze Pausen.";
+                }
+            } else {
+                if (weekday === 5 || weekday === 6) {
+                    type   = indoor ? "Sweet Spot Indoor" : "Long Ride / Renntempo";
+                    icon   = indoor ? "🎯" : "🏆";
+                    color  = "#3498db";
+                    detail = indoor
+                        ? "Zu frisch für drinnen – aber Regen lässt keine Wahl."
+                        : "Top-Form, Renntempo oder langer Ride mit Segmenten.";
+                } else {
+                    type   = "Intervalle – du bist frisch";
+                    icon   = "🔥";
+                    color  = "#e67e22";
+                    detail = "Beste Form für harte Einheiten – nutze die Frische.";
+                }
             }
 
-            const map = L.map("map" + day, {
-                zoomControl: false,
-                attributionControl: false,
-                dragging: false,
-                scrollWheelZoom: false,
-                doubleClickZoom: false,
-            }).setView(LINZ_HAUPTPLATZ, 10);
-
-            L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-                subdomains: "abcd",
-                maxZoom: 19,
-            }).addTo(map);
-
-            L.marker(LINZ_HAUPTPLATZ).addTo(map);
-
-            const circle = L.circle(LINZ_HAUPTPLATZ, {
-                radius: 1,
-                color: "#39ff14",
-                weight: 1.5,
-                fillColor: "#39ff14",
-                fillOpacity: 0.1,
-            }).addTo(map);
-
-            routeMaps[day] = map;
-            routeCircles[day] = circle;
-
-            const minutes = parseInt(document.querySelector(`.day-duration[data-day="${day}"]`).value, 10);
-            const watts = parseInt(document.querySelector(`.day-power[data-day="${day}"]`).value, 10);
-            const radiusKm = estimateRouteDistance(minutes, watts) / 2;
-            circle.setRadius(Math.max(radiusKm * 1000, 1));
-            map.fitBounds(circle.getBounds());
-
-            return map;
-        }
-
-        document.querySelectorAll(".route-planner").forEach(details => {
-            details.addEventListener("toggle", () => {
-                if (!details.open) {
-                    return;
-                }
-                const day = details.dataset.day;
-                const map = initRouteMap(day);
-                map.invalidateSize();
-                const circle = routeCircles[day];
-                if (circle) {
-                    map.fitBounds(circle.getBounds());
-                } else if (routeLayers[day]) {
-                    map.fitBounds(routeLayers[day].getBounds());
-                }
-            });
-        });
-
-        function estimateRouteDistance(minutes, watts) {
-            const speedKmh = 22 + (watts / FTP) * 11;
-            return (minutes / 60) * speedKmh;
-        }
-
-        function updateRoutePlanner(day, minutes, watts) {
-            const distance = estimateRouteDistance(minutes, watts);
-            document.getElementById("distanceValue" + day).textContent = distance.toFixed(1) + " km";
-
-            const radius = distance / 2;
-            const waypoints = ROUTE_DESTINATIONS
-                .map(dest => ({ name: dest.name, diff: Math.abs(dest.distance - radius) }))
-                .sort((a, b) => a.diff - b.diff)
-                .slice(0, 3)
-                .map(dest => dest.name)
-                .join(", ");
-
-            document.getElementById("waypointsValue" + day).textContent =
-                `${waypoints} (Wendepunkt ca. ${radius.toFixed(1)} km)`;
-
-            const circle = routeCircles[day];
-            const map = routeMaps[day];
-            if (circle) {
-                const radiusMeters = Math.max(radius * 1000, 1);
-                circle.setRadius(radiusMeters);
-                map.fitBounds(circle.getBounds());
-            }
-        }
-
-        function haversineKm(a, b) {
-            const R = 6371;
-            const dLat = (b[0] - a[0]) * Math.PI / 180;
-            const dLon = (b[1] - a[1]) * Math.PI / 180;
-            const lat1 = a[0] * Math.PI / 180;
-            const lat2 = b[0] * Math.PI / 180;
-            const sinDLat = Math.sin(dLat / 2);
-            const sinDLon = Math.sin(dLon / 2);
-            const c = sinDLat * sinDLat + Math.cos(lat1) * Math.cos(lat2) * sinDLon * sinDLon;
-            return 2 * R * Math.asin(Math.sqrt(c));
-        }
-
-        function interpolateTowards(start, end, distanceKm) {
-            const totalKm = haversineKm(start, end);
-            const fraction = totalKm > 0 ? Math.min(Math.max(distanceKm / totalKm, 0), 1) : 0;
-            return [
-                start[0] + (end[0] - start[0]) * fraction,
-                start[1] + (end[1] - start[1]) * fraction,
-            ];
-        }
-
-        async function loadRealRoute(day) {
-            if (routeLoading[day]) {
-                return;
-            }
-            routeLoading[day] = true;
-
-            const btn = document.getElementById("routeBtn" + day);
-            const elevationEl = document.getElementById("elevationValue" + day);
-            const targetEl = document.getElementById("routeTargetValue" + day);
-            const minutes = parseInt(document.querySelector(`.day-duration[data-day="${day}"]`).value, 10);
-            const watts = parseInt(document.querySelector(`.day-power[data-day="${day}"]`).value, 10);
-            const radiusKm = estimateRouteDistance(minutes, watts) / 2;
-
-            const target = ROUTE_DIRECTIONS[(day - 1) % ROUTE_DIRECTIONS.length];
-            targetEl.textContent = `📍 Ziel: ${target.name}`;
-            const waypoint = interpolateTowards(LINZ_HAUPTPLATZ, target.coords, radiusKm);
-
-            btn.disabled = true;
-            btn.textContent = "Lade Route...";
-
-            try {
-                const response = await fetch("https://api.openrouteservice.org/v2/directions/cycling-road/geojson", {
-                    method: "POST",
-                    headers: {
-                        "Authorization": ORS_API_KEY,
-                        "Content-Type": "application/json",
-                    },
-                    body: JSON.stringify({
-                        coordinates: [
-                            [LINZ_HAUPTPLATZ[1], LINZ_HAUPTPLATZ[0]],
-                            [waypoint[1], waypoint[0]],
-                        ],
-                        elevation: true,
-                    }),
-                });
-
-                if (!response.ok) {
-                    throw new Error("ORS-Antwort: " + response.status);
-                }
-
-                const geojson = await response.json();
-                const properties = geojson.features[0].properties;
-                const ascent = properties.ascent ?? properties.summary.ascent;
-                elevationEl.textContent = Math.round(ascent) + " hm";
-
-                const map = initRouteMap(day);
-                if (routeCircles[day]) {
-                    map.removeLayer(routeCircles[day]);
-                    routeCircles[day] = null;
-                }
-                if (routeLayers[day]) {
-                    map.removeLayer(routeLayers[day]);
-                }
-
-                const layer = L.geoJSON(geojson, {
-                    style: { color: "#39ff14", weight: 4, opacity: 0.85 },
-                }).addTo(map);
-                routeLayers[day] = layer;
-                map.fitBounds(layer.getBounds());
-
-                routeLoaded[day] = true;
-                btn.textContent = "🗺️ Echte Route geladen";
-                btn.disabled = false;
-            } catch (err) {
-                console.error(err);
-                elevationEl.textContent = "Fehler";
-                btn.textContent = "🗺️ Erneut versuchen";
-                btn.disabled = false;
-            } finally {
-                routeLoading[day] = false;
+            const el = document.getElementById("trainingSuggestion" + day);
+            if (el) {
+                el.innerHTML = `
+                    <span class="ts-badge" style="border-color:${color};color:${color};">${icon} ${type}</span>
+                    <span class="ts-detail">${detail}</span>`;
             }
         }
 
@@ -361,17 +213,15 @@
                 const dayTss = (durationSeconds * watts * intensityFactor) / (FTP * 3600) * 100;
                 document.getElementById("tssValue" + day).textContent = dayTss.toFixed(1);
 
-                updateRoutePlanner(day, minutes, watts);
-
-                if (routeLoaded[day]) {
-                    document.getElementById("routeBtn" + day).textContent = "Lade neue Route...";
-                    clearTimeout(routeReloadTimers[day]);
-                    routeReloadTimers[day] = setTimeout(() => loadRealRoute(day), 1200);
-                }
-
                 ctl = ctl * CTL_DECAY + dayTss * (1 - CTL_DECAY);
                 atl = atl * ATL_DECAY + dayTss * (1 - ATL_DECAY);
                 const tsb = ctl - atl;
+
+                const d = new Date();
+                d.setDate(d.getDate() + day);
+                const weekday = (d.getDay() + 6) % 7; // 0=Mo … 6=So
+                const weather = WEATHER_FORECAST[day - 1] || null;
+                suggestTraining(day, tsb, weekday, weather);
 
                 forecastDates.push(isoDate(day));
                 forecastCtl.push(ctl);
@@ -398,5 +248,7 @@
         document.querySelectorAll(".day-duration, .day-power").forEach(slider => {
             slider.addEventListener("input", simulate);
         });
+
+        simulate();
 
         simulate();

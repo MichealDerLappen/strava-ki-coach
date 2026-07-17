@@ -85,10 +85,16 @@ stufen (5 s bis 60 min) auf einer logarithmischen Zeitachse:
 - **Gepunktete graue Linie**: Saisonbestwert (alle gecachten Rides).
 - **FTP-Annotation**: 95 % des 20-min-Bestwerts als automatische FTP-Schätzung.
 
-Die Hochauflösungs-Leistungsdaten (Garmin-Detail-API, ~1 Hz) werden pro Ride
-in `streams/<id>.json` gecacht. Strava-importierte Aktivitäten in Garmin Connect
-sind über die API nicht zugänglich – nur native Garmin-Aktivitäten (am Gerät
-aufgezeichnet und direkt hochgeladen) liefern Streams.
+Die Hochauflösungs-Daten (Garmin-Detail-API, ~1 Hz) werden pro Aktivität
+in `streams/<id>.json` gecacht. Jede Datei enthält:
+
+- `watts` + `timestamps_ms` – Leistung (Rides mit Powermeter)
+- `heartrates` + `hr_timestamps_ms` – Herzfrequenz
+- `latitudes`, `longitudes`, `gps_timestamps_ms` – GPS-Track
+- `elevations` – Höhenprofil
+
+Strava-importierte Aktivitäten in Garmin Connect sind über die API nicht
+zugänglich – nur native Garmin-Aktivitäten liefern Streams.
 
 ### Interaktives Dashboard `formkurve.html`
 
@@ -124,11 +130,11 @@ Datei für Google Drive). Enthalten sind:
   Wochenweise (gestapelte Balken je Kalenderwoche). Umschalter oben links im
   Chart. Aktivitäten ohne HR-Stream fallen auf Durchschnitts-HF zurück.
   Schwellen: LT1 = 82 % HFmax, LT2 = 92 % HFmax (in `strava_auth.py` editierbar).
-- **Routen-Planer**: Einklappbares Accordion pro Tages-Karte. Leaflet-Karte
-  (Dark-Mode-Tiles, lazy initialisiert), Live-Radius-Kreis aus Dauer/Leistung,
-  Wendepunkt-Vorschläge aus dem Linzer Umland. Optional: echte Strecke +
-  Höhenmeter via OpenRouteService ("🗺️ Echte Route laden"), automatische
-  Neu-Berechnung bei Slider-Änderung.
+- **Trainingstyp-Empfehlung**: Jede Tages-Karte zeigt einen farbigen Badge
+  mit dem empfohlenen Einheittyp (Ruhetag / Grundlage / Sweet Spot / Tempo /
+  Intervalle / Long Ride). Berechnet aus der TSB-Prognose für diesen Tag,
+  dem Wochentag und der Wettervorhersage (Regen → Indoor). Aktualisiert sich
+  live wenn die Slider bewegt werden.
 
 ## Automatischer täglicher Run (macOS LaunchAgent)
 
