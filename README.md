@@ -154,13 +154,26 @@ Drei Stat-Boxes direkt unter dem Dropdown:
 - **Ø VAM** (m/h) – mittlere Aufstiegsgeschwindigkeit über alle Touren
 - **Distanz / Touren** – Saison-Gesamtdistanz und Tourenanzahl
 
-### Analyse-Charts
+### Touren – Kennzahlen (Tabelle)
 
-- **Höhenprofil der letzten Tour**: interaktiver Scatter-Plot, Distanz (km) vs. Höhe (m)
-- **Hangneigungsverteilung** (letzte 5 Touren): gestackte horizontale Balken nach Neigungszonen:
-  – Flach (<5 %), Moderat (5–15 %), Steil (15–30 %), Extrem (>30 %)
-- **Kennzahlen-Tabelle** (letzte 5 Touren): Name, Datum, Dauer, Distanz,
-  Aufstieg/Abstieg, VAM, hrTSS
+Steht ganz oben in der Analyse. Zeigt alle Touren mit GPS-Stream-Daten:
+Name, Datum, Dauer, Distanz, Aufstieg ↑, Abstieg ↓, VAM, hrTSS.
+
+**Zeitraum-Filter** (Dropdown rechts neben dem Titel):
+Letzte 4 Wochen / 3 Monate / 6 Monate / Dieses Jahr / Gesamt – filtert Zeilen per JS live.
+
+**Zeile anklicken** → Accordion-Panel klappt auf mit:
+- **Höhenprofil** (Plotly, interaktiv): Distanz (km) vs. Höhe (m)
+- **Hangneigungsverteilung** (4 Balken): Zeit in Flach / Moderat / Steil / Extrem
+- Nochmal klicken oder **✕** schließt das Panel
+
+**GPS-Highlight**: Die ausgewählte Tour wird in der Heatmap darunter als blaue
+Linie eingezeichnet; die Karte zoomt automatisch auf die Strecke.
+
+### VAM
+
+VAM (Velocità Ascensionale Media) = **Gesamtaufstieg ÷ Gesamtgehzeit**.
+Beispiel: 686 m Aufstieg in 1:12 h → 572 m/h.
 
 ### hrTSS
 
