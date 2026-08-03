@@ -398,6 +398,350 @@ def compute_mmp_curves():
     }
 
 
+def compute_hrtss_from_stream(activity_id):
+    """Berechnet hrTSS sekundengenau aus dem HR-Stream.
+    Formel: Σ (dt_s × (hr/LTHR)²) / 36
+    → 1h bei LTHR = 3600/36 × 1² = 100 TSS."""
+    path = os.path.join(STREAMS_DIR, f"{activity_id}.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        s = json.load(open(path, encoding="utf-8"))
+    except Exception:
+        return None
+    hrs = s.get("heartrates", [])
+    ts  = s.get("hr_timestamps_ms", [])
+    if not hrs or not ts or len(hrs) != len(ts):
+        return None
+    total = 0.0
+    for i in range(1, len(hrs)):
+        dt = (ts[i] - ts[i - 1]) / 1000.0
+        if 0 < dt < 30 and hrs[i] > 0:
+            total += dt * (hrs[i] / LTHR) ** 2
+    return round(total / 36, 1) if total > 0 else None
+
+
+def compute_hike_metrics(activity):
+    """Berechnet Wander-spezifische Metriken aus GPS+Elevation-Stream.
+    Gibt dict mit gain, loss, vam_best, vam_median, downhill_stress zurück."""
+    import math
+
+    path = os.path.join(STREAMS_DIR, f"{activity['id']}.json")
+    if not os.path.exists(path):
+        return {}
+    try:
+        s = json.load(open(path, encoding="utf-8"))
+    except Exception:
+        return {}
+
+    elevs   = s.get("elevations", [])
+    lats    = s.get("latitudes", [])
+    lons    = s.get("longitudes", [])
+    gps_ts  = s.get("gps_timestamps_ms", [])
+
+    if not elevs or len(elevs) < 2:
+        return {}
+
+    def hav_m(la1, lo1, la2, lo2):
+        R = 6_371_000.0
+        p1, p2 = math.radians(la1), math.radians(la2)
+        dp = math.radians(la2 - la1)
+        dl = math.radians(lo2 - lo1)
+        a = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
+        return 2 * R * math.asin(math.sqrt(a))
+
+    gain = loss = 0.0
+    cum_dist = 0.0
+    vam_vals = []
+    slope_times = {"flat": 0, "moderate": 0, "steep": 0, "extreme": 0}
+    dist_km_profile = [0.0]
+    elev_profile = [elevs[0]]
+
+    n = min(len(elevs), len(lats), len(lons),
+            len(gps_ts) if gps_ts else len(elevs))
+
+    for i in range(1, n):
+        de = elevs[i] - elevs[i - 1]
+        dist_m = hav_m(lats[i-1], lons[i-1], lats[i], lons[i]) if lats else 0
+        cum_dist += dist_m
+        dist_km_profile.append(round(cum_dist / 1000, 3))
+        elev_profile.append(elevs[i])
+
+        if de > 0.3:
+            gain += de
+        elif de < -0.3:
+            loss += abs(de)
+
+        # VAM: nur für Aufstiegssegmente
+        if de > 0.5 and gps_ts:
+            dt_h = (gps_ts[i] - gps_ts[i - 1]) / 3_600_000.0
+            if dt_h > 0:
+                vam = de / dt_h
+                if 50 < vam < 3000:
+                    vam_vals.append(vam)
+
+        # Hangneigung für Slope-Zonen
+        if dist_m > 1 and gps_ts:
+            grade = abs(de / dist_m) * 100
+            dt_s = (gps_ts[i] - gps_ts[i - 1]) / 1000.0
+            if 0 < dt_s < 30:
+                if grade < 5:
+                    slope_times["flat"] += dt_s
+                elif grade < 15:
+                    slope_times["moderate"] += dt_s
+                elif grade < 30:
+                    slope_times["steep"] += dt_s
+                else:
+                    slope_times["extreme"] += dt_s
+
+    moving_hours = (activity.get("moving_time") or 0) / 3600
+    vam_sorted = sorted(vam_vals)
+    return {
+        "elev_gain":        round(gain),
+        "elev_loss":        round(loss),
+        "downhill_stress":  round(loss * moving_hours),
+        "vam_best":         round(max(vam_vals)) if vam_vals else 0,
+        "vam_median":       round(vam_sorted[len(vam_sorted)//2]) if vam_vals else 0,
+        "slope_times":      slope_times,
+        "dist_km":          round(cum_dist / 1000, 1),
+        "dist_km_profile":  dist_km_profile,
+        "elev_profile":     elev_profile,
+    }
+
+
+def compute_hike_summary(activities):
+    """Aggregiert Saison-Statistiken aller Wanderungen."""
+    hikes = [a for a in activities if a.get("type") == "Hike"]
+    if not hikes:
+        return None
+
+    total_gain = total_loss = total_dist_km = 0.0
+    all_vam = []
+    hike_details = []
+
+    for a in sorted(hikes, key=lambda x: x.get("start_date", ""), reverse=True):
+        m = compute_hike_metrics(a)
+        hrtss = compute_hrtss_from_stream(a["id"])
+        if m:
+            total_gain    += m.get("elev_gain", 0)
+            total_loss    += m.get("elev_loss", 0)
+            total_dist_km += m.get("dist_km", 0)
+            if m.get("vam_median"):
+                all_vam.append(m["vam_median"])
+        hike_details.append({
+            "name":      a.get("name", ""),
+            "date":      (a.get("start_date_local") or a.get("start_date", ""))[:10],
+            "duration":  a.get("moving_time", 0),
+            "hrtss":     hrtss,
+            **m,
+        })
+
+    avg_vam = round(sum(all_vam) / len(all_vam)) if all_vam else 0
+    return {
+        "total_gain":     round(total_gain),
+        "total_loss":     round(total_loss),
+        "total_dist_km":  round(total_dist_km, 1),
+        "total_hikes":    len(hikes),
+        "avg_vam":        avg_vam,
+        "hike_details":   hike_details,
+    }
+
+
+def plot_hike_analytics(hike_summary, weather_forecast=None):
+    """Erzeugt HTML-Sektionen für das Wander-Modul:
+    – Header-Stat-Boxes (Gesamt-Hm, VAM, Distanz/Touren)
+    – Höhenprofil der letzten Tour
+    – Hangneigungsverteilung (letzten 5 Touren, gestackte Balken)
+    – Metriken-Tabelle der letzten 5 Touren
+    – Wetter-Warnung (Regen > 40 % → Abstiegs-Hinweis)
+    Gibt (header_html, charts_html, weather_warn_html) zurück.
+    """
+    if not hike_summary:
+        return "", "", ""
+
+    details = hike_summary.get("hike_details", [])
+
+    # ── Header-Stat-Boxes ───────────────────────────────────────────────────
+    total_gain   = hike_summary.get("total_gain", 0)
+    total_loss   = hike_summary.get("total_loss", 0)
+    total_dist   = hike_summary.get("total_dist_km", 0)
+    total_hikes  = hike_summary.get("total_hikes", 0)
+    avg_vam      = hike_summary.get("avg_vam", 0)
+
+    header_html = f"""
+    <div class="ftp-header" style="margin-top:24px;">
+      <div class="ftp-block">
+        <div class="ftp-label">Gesamt Aufstieg</div>
+        <div class="ftp-value">{total_gain:,}<span class="ftp-unit"> m</span></div>
+        <div class="ftp-sub">Abstieg {total_loss:,} m</div>
+      </div>
+      <div class="ftp-divider"></div>
+      <div class="ftp-block">
+        <div class="ftp-label">Ø VAM</div>
+        <div class="ftp-value {'ftp-lower' if avg_vam < 600 else ''}">{avg_vam}<span class="ftp-unit"> m/h</span></div>
+        <div class="ftp-sub">Aufstiegsgeschwindigkeit</div>
+      </div>
+      <div class="ftp-divider"></div>
+      <div class="ftp-block">
+        <div class="ftp-label">Distanz / Touren</div>
+        <div class="ftp-value">{total_dist}<span class="ftp-unit"> km</span></div>
+        <div class="ftp-sub">{total_hikes} Wanderungen</div>
+      </div>
+    </div>
+"""
+
+    # ── Wetter-Warnung ──────────────────────────────────────────────────────
+    weather_warn_html = ""
+    if weather_forecast:
+        for day_idx, wf in enumerate(weather_forecast[:3]):
+            if wf.get("precip_prob", 0) > 40:
+                day_name = ["Morgen", "Übermorgen", f"in {day_idx+1} Tagen"][min(day_idx, 2)]
+                weather_warn_html = (
+                    f'<div class="weather-oracle-box" style="border-left-color:#e74c3c;margin-top:16px;">'
+                    f'<h3 style="color:#e74c3c;">⚠️ Nässe-Warnung {day_name}</h3>'
+                    f'<p>Regenwahrscheinlichkeit {wf["precip_prob"]} % – '
+                    f'erhöhtes Risiko für nasse und rutschige Passagen im Abstieg. '
+                    f'Stöcke mitehmen, Abstiegstempo reduzieren.</p>'
+                    f'</div>'
+                )
+                break
+
+    # ── Charts ──────────────────────────────────────────────────────────────
+    last5 = [d for d in details if d.get("elev_profile")][:5]
+    charts_html = ""
+
+    if last5:
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+
+        # Höhenprofil der letzten Tour
+        last = last5[0]
+        dist_prof = last.get("dist_km_profile", [])
+        elev_prof = last.get("elev_profile", [])
+
+        fig_elev = go.Figure()
+        fig_elev.add_trace(go.Scatter(
+            x=dist_prof, y=elev_prof,
+            mode="lines",
+            fill="tozeroy",
+            fillcolor="rgba(52,152,219,0.18)",
+            line=dict(color="#3498db", width=2),
+            name="Höhe (m)",
+            hovertemplate="%{x:.2f} km · %{y:.0f} m<extra></extra>",
+        ))
+        fig_elev.update_layout(
+            paper_bgcolor="#111418", plot_bgcolor="#111418",
+            font=dict(color="#e6e6e6", size=12),
+            margin=dict(t=40, b=40, l=60, r=20),
+            height=260,
+            title=dict(text=f"Höhenprofil: {last['name'] or last['date']}",
+                       font=dict(size=14, color="#e6e6e6"), x=0),
+            xaxis=dict(title="Distanz (km)", gridcolor="#2d333b",
+                       showline=False, zeroline=False),
+            yaxis=dict(title="Höhe (m)", gridcolor="#2d333b",
+                       showline=False, zeroline=False),
+        )
+        elev_html = fig_elev.to_html(full_html=False, include_plotlyjs=False,
+                                      config={"displayModeBar": False})
+
+        # Hangneigungsverteilung letzter 5 Touren
+        slope_names = []
+        s_flat = s_mod = s_steep = s_ext = []
+
+        slope_names  = [d.get("name") or d.get("date", "") for d in last5]
+        s_flat   = [d.get("slope_times", {}).get("flat", 0)     / 60 for d in last5]
+        s_mod    = [d.get("slope_times", {}).get("moderate", 0) / 60 for d in last5]
+        s_steep  = [d.get("slope_times", {}).get("steep", 0)    / 60 for d in last5]
+        s_ext    = [d.get("slope_times", {}).get("extreme", 0)  / 60 for d in last5]
+
+        fig_slope = go.Figure()
+        for vals, label, color in [
+            (s_flat,  "Flach (<5 %)",     "#2ecc71"),
+            (s_mod,   "Moderat (5–15 %)", "#f1c40f"),
+            (s_steep, "Steil (15–30 %)",  "#e67e22"),
+            (s_ext,   "Extrem (>30 %)",   "#e74c3c"),
+        ]:
+            fig_slope.add_trace(go.Bar(
+                y=slope_names, x=vals, name=label,
+                orientation="h",
+                marker_color=color,
+                hovertemplate="%{x:.0f} min<extra>" + label + "</extra>",
+            ))
+        fig_slope.update_layout(
+            barmode="stack",
+            paper_bgcolor="#111418", plot_bgcolor="#111418",
+            font=dict(color="#e6e6e6", size=12),
+            margin=dict(t=40, b=40, l=140, r=20),
+            height=280,
+            title=dict(text="Hangneigungsverteilung (letzte 5 Touren)",
+                       font=dict(size=14, color="#e6e6e6"), x=0),
+            xaxis=dict(title="Zeit (min)", gridcolor="#2d333b",
+                       showline=False, zeroline=False),
+            yaxis=dict(gridcolor="#2d333b", showline=False, zeroline=False),
+            legend=dict(orientation="h", y=-0.22, x=0,
+                        bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
+        )
+        slope_html = fig_slope.to_html(full_html=False, include_plotlyjs=False,
+                                        config={"displayModeBar": False})
+
+        # Metriken-Tabelle letzter 5 Touren
+        tbl_header = ["Tour", "Datum", "Zeit", "Dist.", "Aufstieg", "Abstieg",
+                       "VAM", "hrTSS"]
+        rows = []
+        for d in last5:
+            dur_h   = (d.get("duration") or 0) // 3600
+            dur_m   = ((d.get("duration") or 0) % 3600) // 60
+            dur_str = f"{dur_h}:{dur_m:02d} h"
+            rows.append([
+                d.get("name") or "–",
+                d.get("date", "–"),
+                dur_str,
+                f"{d.get('dist_km', 0):.1f} km",
+                f"↑ {d.get('elev_gain', 0):,} m",
+                f"↓ {d.get('elev_loss', 0):,} m",
+                f"{d.get('vam_median', 0)} m/h",
+                str(d.get("hrtss") or "–"),
+            ])
+
+        fig_tbl = go.Figure(go.Table(
+            header=dict(
+                values=tbl_header,
+                fill_color="#1c2128",
+                font=dict(color="#9aa4af", size=12),
+                line_color="#2d333b",
+                align="left",
+            ),
+            cells=dict(
+                values=list(zip(*rows)) if rows else [[] for _ in tbl_header],
+                fill_color="#111418",
+                font=dict(color="#e6e6e6", size=12),
+                line_color="#2d333b",
+                align="left",
+            ),
+        ))
+        fig_tbl.update_layout(
+            paper_bgcolor="#111418",
+            margin=dict(t=40, b=10, l=0, r=0),
+            height=220,
+            title=dict(text="Letzte Touren – Kennzahlen",
+                       font=dict(size=14, color="#e6e6e6"), x=0),
+        )
+        tbl_html = fig_tbl.to_html(full_html=False, include_plotlyjs=False,
+                                    config={"displayModeBar": False})
+
+        charts_html = (
+            "<hr>\n"
+            "<h2>Analyse Wanderungen</h2>\n"
+            + elev_html
+            + "\n"
+            + slope_html
+            + "\n"
+            + tbl_html
+        )
+
+    return header_html, charts_html, weather_warn_html
+
+
 def compute_tss(activity):
     """Berechnet bzw. schaetzt den Trainingsstress-Score (TSS) einer Aktivitaet."""
 
@@ -410,9 +754,11 @@ def compute_tss(activity):
             tss = (moving_time * normalized_power * intensity_factor) / (FTP * 3600) * 100
             return round(tss, 1)
 
-    # Aktivitaeten ohne Leistungsdaten (Hike, WeightTraining, Run, ...):
-    # Kein Leistungswert: bevorzugt Suffer Score (Strava-Legacy-Daten),
-    # sonst grobe Schaetzung ueber Herzfrequenz und Laktatschwelle.
+    # Hike/Run: sekundengenaues hrTSS aus Stream bevorzugen
+    hrtss = compute_hrtss_from_stream(activity.get("id"))
+    if hrtss is not None:
+        return hrtss
+
     suffer_score = activity.get("suffer_score")
     if suffer_score:
         return round(suffer_score * 0.6, 1)
@@ -954,7 +1300,9 @@ def plot_intensity_distribution(activities):
     )
 
 
-def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None, heatmap_embed=None):
+def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None,
+                   heatmap_embed=None, hike_heatmap_embed=None,
+                   hike_summary=None):
     """Erstellt ein interaktives Dashboard der Formkurve (CTL, ATL, TSB)
     inkl. Coach-Analyse als 'formkurve.html'."""
 
@@ -1192,6 +1540,32 @@ def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None, he
     else:
         heatmap_section = ""
 
+    hike_header_html, hike_charts_html, hike_weather_warn = plot_hike_analytics(
+        hike_summary, weather_forecast=weather_forecast
+    )
+
+    if hike_heatmap_embed:
+        hike_heatmap_section = (
+            "    <h2>Heatmap aller Wanderungen</h2>\n"
+            "    <p class=\"status-text\" style=\"font-size:12px;color:#6e7a8a;\">"
+            "Layer-Umschalter oben rechts in der Karte: Häufigkeit / Geschwindigkeit."
+            "</p>\n"
+            + "    " + hike_heatmap_embed
+        )
+    else:
+        hike_heatmap_section = ""
+
+    if hike_header_html or hike_heatmap_section or hike_charts_html:
+        hike_section = (
+            hike_header_html
+            + hike_weather_warn
+            + hike_charts_html
+            + "\n"
+            + hike_heatmap_section
+        )
+    else:
+        hike_section = "<p class=\"status-text\">Keine Wanderungen mit GPS-Daten verfügbar.</p>"
+
     mmp_chart = plot_mmp(mmp_data)
     if mmp_chart:
         mmp_section = (
@@ -1224,6 +1598,14 @@ def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None, he
 </style>
 </head>
 <body>
+    <div class="sport-selector">
+        <select id="sportSelect" onchange="switchSport(this.value)">
+            <option value="cycling">🚴 Radfahren</option>
+            <option value="hiking">🥾 Wanderungen</option>
+        </select>
+    </div>
+
+    <div id="cycling-content">
     <div class="ftp-header">
         <div class="ftp-block">
             <div class="ftp-label">FTP konfiguriert</div>
@@ -1313,6 +1695,12 @@ def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None, he
     </script>
 
 {heatmap_section}
+    </div><!-- /cycling-content -->
+
+    <div id="hiking-content" style="display:none;">
+{hike_section}
+    </div><!-- /hiking-content -->
+
 </body>
 </html>
 """
@@ -1322,15 +1710,17 @@ def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None, he
     print(f"Formkurve gespeichert unter {FORMKURVE_PATH}")
 
 
-def generate_heatmap(activities):
-    """Heatmap aller Rides mit zwei umschaltbaren Layern:
+def generate_heatmap(activities, sport_types=None):
+    """Heatmap für beliebige Sportarten mit zwei umschaltbaren Layern:
     - Häufigkeit: grün (1×) → rot (am häufigsten)
     - Geschwindigkeit: blau (langsam) → rot (schnell), berechnet aus GPS+Zeit"""
     import math
     import folium
     from folium.plugins import HeatMap
 
-    ride_ids = {a["id"] for a in activities if a.get("type") == "Ride"}
+    if sport_types is None:
+        sport_types = {"Ride"}
+    ride_ids = {a["id"] for a in activities if a.get("type") in sport_types}
     GRID = 4  # 4 Dezimalstellen ≈ ~11m Rasterzellen
 
     def haversine_m(lat1, lon1, lat2, lon2):
@@ -1395,10 +1785,13 @@ def generate_heatmap(activities):
     center_lat = sum(all_lats) / len(all_lats)
     center_lon = sum(all_lons) / len(all_lons)
 
-    # Gewichtete HeatMap-Daten
+    # Logarithmische Gewichtung: 1× sehr schwach, Vielfachfahrten heben sich klar ab.
+    # log(1+1)/log(1+max) = 0 … log(max+1)/log(max+1) = 1
+    import math as _math
     max_count = max(cell_rides.values())
+    log_max = _math.log(max_count + 1)
     freq_data = [
-        [lat, lon, count / max_count]
+        [lat, lon, _math.log(count + 1) / log_max]
         for (lat, lon), count in cell_rides.items()
     ]
 
@@ -1424,10 +1817,16 @@ def generate_heatmap(activities):
     freq_group = folium.FeatureGroup(name="Häufigkeit", show=True)
     HeatMap(
         freq_data,
-        min_opacity=0.3,
-        radius=10,
-        blur=8,
-        gradient={0.0: "#2ecc71", 0.4: "#f1c40f", 0.7: "#e67e22", 1.0: "#e74c3c"},
+        min_opacity=0.05,   # 1×-Routen kaum sichtbar
+        radius=4,           # eng an der GPS-Genauigkeit (~11m Raster)
+        blur=2,             # kaum Weichzeichnung → scharfe Linien
+        gradient={
+            0.0:  "rgba(0,200,80,0.0)",   # 0-Gewicht: unsichtbar
+            0.15: "rgba(0,200,80,0.6)",   # 1× gefahren: schwaches Grün
+            0.45: "#f1c40f",              # mehrfach: Gelb
+            0.75: "#e67e22",              # oft: Orange
+            1.0:  "#e74c3c",              # am häufigsten: Rot
+        },
     ).add_to(freq_group)
     freq_group.add_to(m)
 
@@ -1436,9 +1835,9 @@ def generate_heatmap(activities):
         speed_group = folium.FeatureGroup(name="Geschwindigkeit", show=False)
         HeatMap(
             speed_data,
-            min_opacity=0.3,
-            radius=10,
-            blur=8,
+            min_opacity=0.05,
+            radius=4,
+            blur=2,
             gradient={0.0: "#3498db", 0.35: "#2ecc71", 0.65: "#f1c40f", 1.0: "#e74c3c"},
         ).add_to(speed_group)
         speed_group.add_to(m)
@@ -1498,9 +1897,19 @@ def main():
               f"{mmp_data['count_season']} gesamt – FTP-Schaetzung: {ftp_est} W")
 
     weather_forecast = fetch_weather_forecast()
-    heatmap_embed = generate_heatmap(activities)
+    heatmap_embed = generate_heatmap(activities, sport_types={"Ride"})
+    hike_heatmap_embed = generate_heatmap(activities, sport_types={"Hike"})
+
+    hike_summary = compute_hike_summary(activities)
+    if hike_summary:
+        print(f"Wanderungen: {hike_summary['total_hikes']} Touren · "
+              f"{hike_summary['total_gain']:,} m Aufstieg · "
+              f"{hike_summary['total_dist_km']} km · "
+              f"Ø VAM {hike_summary['avg_vam']} m/h")
+
     plot_formkurve(history, activities, weather_forecast, mmp_data=mmp_data,
-                   heatmap_embed=heatmap_embed)
+                   heatmap_embed=heatmap_embed, hike_heatmap_embed=hike_heatmap_embed,
+                   hike_summary=hike_summary)
 
     upload_file(ACTIVITIES_PATH, DRIVE_FILENAME)
     upload_file(FORMKURVE_PATH, "formkurve.html", mimetype="text/html")

@@ -142,6 +142,47 @@ Datei für Google Drive). Enthalten sind:
   dem Wochentag und der Wettervorhersage (Regen → Indoor). Aktualisiert sich
   live wenn die Slider bewegt werden.
 
+## Wander-Modul (Hiking Analytics)
+
+Das Dashboard enthält eine dedizierte Wanderungs-Ansicht (Umschalter oben links: "Wanderungen"):
+
+### Header-Statistiken
+
+Drei Stat-Boxes direkt unter dem Dropdown:
+
+- **Gesamt Aufstieg** (m) + Abstieg
+- **Ø VAM** (m/h) – mittlere Aufstiegsgeschwindigkeit über alle Touren
+- **Distanz / Touren** – Saison-Gesamtdistanz und Tourenanzahl
+
+### Analyse-Charts
+
+- **Höhenprofil der letzten Tour**: interaktiver Scatter-Plot, Distanz (km) vs. Höhe (m)
+- **Hangneigungsverteilung** (letzte 5 Touren): gestackte horizontale Balken nach Neigungszonen:
+  – Flach (<5 %), Moderat (5–15 %), Steil (15–30 %), Extrem (>30 %)
+- **Kennzahlen-Tabelle** (letzte 5 Touren): Name, Datum, Dauer, Distanz,
+  Aufstieg/Abstieg, VAM, hrTSS
+
+### hrTSS
+
+Für Wanderungen und Läufe wird der Trainingsstress-Score sekundengenau aus der
+HR-Zeitreihe berechnet (statt grober Schätzung via Durchschnitts-HF):
+
+```
+hrTSS = Σ (dt_s × (hr / LTHR)²) / 36
+```
+
+→ 1 h bei LTHR (172 bpm) = 100 TSS.
+
+### Wetter-Warnung
+
+Liegt die Regenwahrscheinlichkeit der nächsten 3 Tage über 40 %, erscheint ein
+roter Hinweis auf erhöhtes Abstiegs-Rutschrisiko.
+
+### Heatmap
+
+Darunter die GPS-Heatmap aller Wanderungen (Häufigkeit / Geschwindigkeit,
+identische Layer-Umschalter wie beim Radfahren).
+
 ## Automatischer täglicher Run (macOS LaunchAgent)
 
 Das Script läuft täglich um 06:00 Uhr automatisch via macOS LaunchAgent.

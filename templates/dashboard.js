@@ -1,3 +1,8 @@
+        function switchSport(val) {
+            document.getElementById("cycling-content").style.display = val === "cycling" ? "block" : "none";
+            document.getElementById("hiking-content").style.display  = val === "hiking"  ? "block" : "none";
+        }
+
         const FTP = __FTP__;
         const CTL_TODAY = __CTL_TODAY__;
         const ATL_TODAY = __ATL_TODAY__;
