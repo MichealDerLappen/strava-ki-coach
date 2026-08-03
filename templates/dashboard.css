@@ -438,3 +438,95 @@
         color: #6e7a8a;
         padding-left: 2px;
     }
+
+    /* ── Mobile-Overrides (strikt nur ≤ 768 px) ─────────────────────────── */
+    @media (max-width: 768px) {
+
+        body {
+            padding: 0 12px 48px;
+        }
+
+        /* Metric-Boxes und FTP-Header untereinander stapeln */
+        .metrics {
+            flex-direction: column !important;
+        }
+        .ftp-header {
+            flex-direction: column !important;
+            width: 100% !important;
+            padding: 14px 16px !important;
+            gap: 12px !important;
+            align-items: flex-start !important;
+        }
+        .ftp-divider {
+            width: 100% !important;
+            height: 1px !important;
+        }
+        .ftp-block {
+            padding: 0 !important;
+        }
+
+        /* Wochenplanungs-Grid: 1 Spalte */
+        .day-grid {
+            grid-template-columns: 1fr !important;
+        }
+
+        /* Wochentags-Filter-Buttons: kompakter */
+        .day-filter {
+            gap: 6px !important;
+        }
+        .filter-btn {
+            padding: 8px 12px !important;
+            font-size: 14px !important;
+            min-height: 44px !important;
+        }
+
+        /* Touch-Targets: min. 44 px hoch */
+        button,
+        select,
+        .sport-selector select,
+        #hikeRangeSelect {
+            min-height: 44px !important;
+            font-size: 16px !important; /* verhindert iOS-Zoom-In */
+        }
+
+        /* Slider-Zeilen: Labels über Slider stapeln */
+        .slider-row {
+            flex-wrap: wrap !important;
+        }
+        .slider-row label {
+            min-width: unset !important;
+            width: 100% !important;
+        }
+        .slider-value {
+            min-width: unset !important;
+        }
+
+        /* Heatmap-Iframes kompakter */
+        iframe {
+            height: 380px !important;
+        }
+
+        /* Detail-Panel-Charts auf Mobile etwas niedriger */
+        #hikeElevChart  { height: 180px !important; }
+        #hikeSlopeChart { height: 150px !important; }
+
+        /* Tabellen: horizontal scrollbar statt Abschneiden */
+        #hikeTbl {
+            min-width: 560px;
+        }
+
+        /* Metric-Box: volle Breite */
+        .metric-box {
+            min-width: unset !important;
+            width: 100% !important;
+            box-sizing: border-box;
+        }
+
+        /* Simulation-Ergebnis-Boxes */
+        .sim-results {
+            flex-direction: column !important;
+        }
+        .sim-box {
+            min-width: unset !important;
+        }
+    }

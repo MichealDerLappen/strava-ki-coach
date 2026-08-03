@@ -1647,6 +1647,7 @@ def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None,
 <html lang="de">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Formkurve</title>
 <style>
 {dashboard_css}
