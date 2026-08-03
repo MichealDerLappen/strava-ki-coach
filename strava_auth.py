@@ -683,28 +683,43 @@ def plot_hike_analytics(hike_summary, weather_forecast=None):
         slope_html = fig_slope.to_html(full_html=False, include_plotlyjs=False,
                                         config={"displayModeBar": False})
 
-        # Metriken-Tabelle letzter 5 Touren – einfaches HTML, kein Plotly
+        # Metriken-Tabelle ALLER Touren mit data-date für JS-Filterung
+        # Alle Hikes mit Stream-Daten einbeziehen (nicht nur last5)
+        all_with_metrics = [d for d in details if d.get("elev_profile")]
         tbl_rows_html = ""
-        for d in last5:
+        for d in all_with_metrics:
             dur_h   = (d.get("duration") or 0) // 3600
             dur_m   = ((d.get("duration") or 0) % 3600) // 60
             dur_str = f"{dur_h}:{dur_m:02d} h"
             tbl_rows_html += (
-                f"<tr>"
-                f"<td>{d.get('name') or '–'}</td>"
-                f"<td>{d.get('date', '–')}</td>"
-                f"<td>{dur_str}</td>"
-                f"<td>{d.get('dist_km', 0):.1f} km</td>"
-                f"<td style='color:#2ecc71'>↑ {d.get('elev_gain', 0):,} m</td>"
-                f"<td style='color:#e74c3c'>↓ {d.get('elev_loss', 0):,} m</td>"
-                f"<td>{d.get('vam_median', 0)} m/h</td>"
-                f"<td style='color:#f1c40f'>{d.get('hrtss') or '–'}</td>"
+                f"<tr data-date=\"{d.get('date', '')}\">"
+                f"<td style='padding:9px 14px;border-bottom:1px solid #1c2128'>{d.get('name') or '–'}</td>"
+                f"<td style='padding:9px 14px;border-bottom:1px solid #1c2128'>{d.get('date', '–')}</td>"
+                f"<td style='padding:9px 14px;border-bottom:1px solid #1c2128'>{dur_str}</td>"
+                f"<td style='padding:9px 14px;border-bottom:1px solid #1c2128'>{d.get('dist_km', 0):.1f} km</td>"
+                f"<td style='padding:9px 14px;border-bottom:1px solid #1c2128;color:#2ecc71'>↑ {d.get('elev_gain', 0):,} m</td>"
+                f"<td style='padding:9px 14px;border-bottom:1px solid #1c2128;color:#e74c3c'>↓ {d.get('elev_loss', 0):,} m</td>"
+                f"<td style='padding:9px 14px;border-bottom:1px solid #1c2128'>{d.get('vam_median', 0)} m/h</td>"
+                f"<td style='padding:9px 14px;border-bottom:1px solid #1c2128;color:#f1c40f'>{d.get('hrtss') or '–'}</td>"
                 f"</tr>"
             )
-        tbl_html = f"""
-<h2 style="margin-top:32px;">Letzte Touren – Kennzahlen</h2>
+        tbl_html = """
+<hr>
+<div style="display:flex;align-items:center;gap:16px;margin:24px 0 12px;">
+  <h2 style="margin:0;">Touren – Kennzahlen</h2>
+  <select id="hikeRangeSelect" onchange="filterHikeTable(this.value)"
+    style="background:#1c2128;color:#e6e6e6;border:1px solid #2d333b;border-radius:8px;
+           padding:6px 14px;font-size:13px;font-weight:600;cursor:pointer;outline:none;">
+    <option value="28">Letzte 4 Wochen</option>
+    <option value="90">Letzte 3 Monate</option>
+    <option value="180">Letzte 6 Monate</option>
+    <option value="365">Dieses Jahr</option>
+    <option value="9999" selected>Gesamt</option>
+  </select>
+  <span id="hikeTblCount" style="font-size:13px;color:#6e7a8a;"></span>
+</div>
 <div style="overflow-x:auto;">
-<table style="width:100%;border-collapse:collapse;font-size:13px;color:#e6e6e6;">
+<table id="hikeTbl" style="width:100%;border-collapse:collapse;font-size:13px;color:#e6e6e6;">
   <thead>
     <tr style="background:#1c2128;color:#9aa4af;text-align:left;">
       <th style="padding:10px 14px;border-bottom:1px solid #2d333b;">Tour</th>
@@ -718,19 +733,35 @@ def plot_hike_analytics(hike_summary, weather_forecast=None):
     </tr>
   </thead>
   <tbody>
-    {tbl_rows_html}
-  </tbody>
+""" + tbl_rows_html + """  </tbody>
 </table>
-</div>"""
+</div>
+<script>
+function filterHikeTable(days) {
+    const rows = document.querySelectorAll('#hikeTbl tbody tr');
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - parseInt(days));
+    let visible = 0;
+    rows.forEach(row => {
+        const d = new Date(row.dataset.date);
+        const show = isNaN(cutoff) || days >= 9999 || d >= cutoff;
+        row.style.display = show ? '' : 'none';
+        if (show) visible++;
+    });
+    const el = document.getElementById('hikeTblCount');
+    if (el) el.textContent = visible + ' Tour' + (visible !== 1 ? 'en' : '');
+}
+filterHikeTable(9999);
+</script>"""
 
         charts_html = (
             "<hr>\n"
             "<h2>Analyse Wanderungen</h2>\n"
+            + tbl_html
+            + "\n"
             + elev_html
             + "\n"
             + slope_html
-            + "\n"
-            + tbl_html
         )
 
     return header_html, charts_html, weather_warn_html
