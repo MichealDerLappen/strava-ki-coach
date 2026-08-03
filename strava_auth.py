@@ -612,7 +612,6 @@ def plot_hike_analytics(hike_summary, weather_forecast=None):
 
     if last5:
         import plotly.graph_objects as go
-        from plotly.subplots import make_subplots
 
         # Höhenprofil der letzten Tour
         last = last5[0]
@@ -684,50 +683,45 @@ def plot_hike_analytics(hike_summary, weather_forecast=None):
         slope_html = fig_slope.to_html(full_html=False, include_plotlyjs=False,
                                         config={"displayModeBar": False})
 
-        # Metriken-Tabelle letzter 5 Touren
-        tbl_header = ["Tour", "Datum", "Zeit", "Dist.", "Aufstieg", "Abstieg",
-                       "VAM", "hrTSS"]
-        rows = []
+        # Metriken-Tabelle letzter 5 Touren – einfaches HTML, kein Plotly
+        tbl_rows_html = ""
         for d in last5:
             dur_h   = (d.get("duration") or 0) // 3600
             dur_m   = ((d.get("duration") or 0) % 3600) // 60
             dur_str = f"{dur_h}:{dur_m:02d} h"
-            rows.append([
-                d.get("name") or "–",
-                d.get("date", "–"),
-                dur_str,
-                f"{d.get('dist_km', 0):.1f} km",
-                f"↑ {d.get('elev_gain', 0):,} m",
-                f"↓ {d.get('elev_loss', 0):,} m",
-                f"{d.get('vam_median', 0)} m/h",
-                str(d.get("hrtss") or "–"),
-            ])
-
-        fig_tbl = go.Figure(go.Table(
-            header=dict(
-                values=tbl_header,
-                fill_color="#1c2128",
-                font=dict(color="#9aa4af", size=12),
-                line_color="#2d333b",
-                align="left",
-            ),
-            cells=dict(
-                values=list(zip(*rows)) if rows else [[] for _ in tbl_header],
-                fill_color="#111418",
-                font=dict(color="#e6e6e6", size=12),
-                line_color="#2d333b",
-                align="left",
-            ),
-        ))
-        fig_tbl.update_layout(
-            paper_bgcolor="#111418",
-            margin=dict(t=40, b=10, l=0, r=0),
-            height=220,
-            title=dict(text="Letzte Touren – Kennzahlen",
-                       font=dict(size=14, color="#e6e6e6"), x=0),
-        )
-        tbl_html = fig_tbl.to_html(full_html=False, include_plotlyjs=False,
-                                    config={"displayModeBar": False})
+            tbl_rows_html += (
+                f"<tr>"
+                f"<td>{d.get('name') or '–'}</td>"
+                f"<td>{d.get('date', '–')}</td>"
+                f"<td>{dur_str}</td>"
+                f"<td>{d.get('dist_km', 0):.1f} km</td>"
+                f"<td style='color:#2ecc71'>↑ {d.get('elev_gain', 0):,} m</td>"
+                f"<td style='color:#e74c3c'>↓ {d.get('elev_loss', 0):,} m</td>"
+                f"<td>{d.get('vam_median', 0)} m/h</td>"
+                f"<td style='color:#f1c40f'>{d.get('hrtss') or '–'}</td>"
+                f"</tr>"
+            )
+        tbl_html = f"""
+<h2 style="margin-top:32px;">Letzte Touren – Kennzahlen</h2>
+<div style="overflow-x:auto;">
+<table style="width:100%;border-collapse:collapse;font-size:13px;color:#e6e6e6;">
+  <thead>
+    <tr style="background:#1c2128;color:#9aa4af;text-align:left;">
+      <th style="padding:10px 14px;border-bottom:1px solid #2d333b;">Tour</th>
+      <th style="padding:10px 14px;border-bottom:1px solid #2d333b;">Datum</th>
+      <th style="padding:10px 14px;border-bottom:1px solid #2d333b;">Zeit</th>
+      <th style="padding:10px 14px;border-bottom:1px solid #2d333b;">Dist.</th>
+      <th style="padding:10px 14px;border-bottom:1px solid #2d333b;">Aufstieg</th>
+      <th style="padding:10px 14px;border-bottom:1px solid #2d333b;">Abstieg</th>
+      <th style="padding:10px 14px;border-bottom:1px solid #2d333b;">VAM</th>
+      <th style="padding:10px 14px;border-bottom:1px solid #2d333b;">hrTSS</th>
+    </tr>
+  </thead>
+  <tbody>
+    {tbl_rows_html}
+  </tbody>
+</table>
+</div>"""
 
         charts_html = (
             "<hr>\n"
