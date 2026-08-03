@@ -496,6 +496,12 @@ def compute_hike_metrics(activity):
 
     moving_hours = (activity.get("moving_time") or 0) / 3600
     vam_sorted = sorted(vam_vals)
+
+    # GPS-Track für Karten-Highlight: max. 300 Punkte
+    step = max(1, n // 300) if n > 300 else 1
+    gps_track = [[round(lats[i], 6), round(lons[i], 6)]
+                 for i in range(0, n, step)] if lats else []
+
     return {
         "elev_gain":        round(gain),
         "elev_loss":        round(loss),
@@ -506,6 +512,7 @@ def compute_hike_metrics(activity):
         "dist_km":          round(cum_dist / 1000, 1),
         "dist_km_profile":  dist_km_profile,
         "elev_profile":     elev_profile,
+        "gps_track":        gps_track,
     }
 
 
@@ -606,93 +613,34 @@ def plot_hike_analytics(hike_summary, weather_forecast=None):
                 )
                 break
 
-    # ── Charts ──────────────────────────────────────────────────────────────
-    last5 = [d for d in details if d.get("elev_profile")][:5]
-    charts_html = ""
+    # ── Charts (dynamisch per JS, kein statisches Plotly mehr nötig) ──────
 
-    if last5:
-        import plotly.graph_objects as go
-
-        # Höhenprofil der letzten Tour
-        last = last5[0]
-        dist_prof = last.get("dist_km_profile", [])
-        elev_prof = last.get("elev_profile", [])
-
-        fig_elev = go.Figure()
-        fig_elev.add_trace(go.Scatter(
-            x=dist_prof, y=elev_prof,
-            mode="lines",
-            fill="tozeroy",
-            fillcolor="rgba(52,152,219,0.18)",
-            line=dict(color="#3498db", width=2),
-            name="Höhe (m)",
-            hovertemplate="%{x:.2f} km · %{y:.0f} m<extra></extra>",
-        ))
-        fig_elev.update_layout(
-            paper_bgcolor="#111418", plot_bgcolor="#111418",
-            font=dict(color="#e6e6e6", size=12),
-            margin=dict(t=40, b=40, l=60, r=20),
-            height=260,
-            title=dict(text=f"Höhenprofil: {last['name'] or last['date']}",
-                       font=dict(size=14, color="#e6e6e6"), x=0),
-            xaxis=dict(title="Distanz (km)", gridcolor="#2d333b",
-                       showline=False, zeroline=False),
-            yaxis=dict(title="Höhe (m)", gridcolor="#2d333b",
-                       showline=False, zeroline=False),
-        )
-        elev_html = fig_elev.to_html(full_html=False, include_plotlyjs=False,
-                                      config={"displayModeBar": False})
-
-        # Hangneigungsverteilung letzter 5 Touren
-        slope_names = []
-        s_flat = s_mod = s_steep = s_ext = []
-
-        slope_names  = [d.get("name") or d.get("date", "") for d in last5]
-        s_flat   = [d.get("slope_times", {}).get("flat", 0)     / 60 for d in last5]
-        s_mod    = [d.get("slope_times", {}).get("moderate", 0) / 60 for d in last5]
-        s_steep  = [d.get("slope_times", {}).get("steep", 0)    / 60 for d in last5]
-        s_ext    = [d.get("slope_times", {}).get("extreme", 0)  / 60 for d in last5]
-
-        fig_slope = go.Figure()
-        for vals, label, color in [
-            (s_flat,  "Flach (<5 %)",     "#2ecc71"),
-            (s_mod,   "Moderat (5–15 %)", "#f1c40f"),
-            (s_steep, "Steil (15–30 %)",  "#e67e22"),
-            (s_ext,   "Extrem (>30 %)",   "#e74c3c"),
-        ]:
-            fig_slope.add_trace(go.Bar(
-                y=slope_names, x=vals, name=label,
-                orientation="h",
-                marker_color=color,
-                hovertemplate="%{x:.0f} min<extra>" + label + "</extra>",
-            ))
-        fig_slope.update_layout(
-            barmode="stack",
-            paper_bgcolor="#111418", plot_bgcolor="#111418",
-            font=dict(color="#e6e6e6", size=12),
-            margin=dict(t=40, b=40, l=140, r=20),
-            height=280,
-            title=dict(text="Hangneigungsverteilung (letzte 5 Touren)",
-                       font=dict(size=14, color="#e6e6e6"), x=0),
-            xaxis=dict(title="Zeit (min)", gridcolor="#2d333b",
-                       showline=False, zeroline=False),
-            yaxis=dict(gridcolor="#2d333b", showline=False, zeroline=False),
-            legend=dict(orientation="h", y=-0.22, x=0,
-                        bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
-        )
-        slope_html = fig_slope.to_html(full_html=False, include_plotlyjs=False,
-                                        config={"displayModeBar": False})
-
-        # Metriken-Tabelle ALLER Touren mit data-date für JS-Filterung
-        # Alle Hikes mit Stream-Daten einbeziehen (nicht nur last5)
+        # Alle Hikes mit Stream-Daten
         all_with_metrics = [d for d in details if d.get("elev_profile")]
-        tbl_rows_html = ""
+
+        # HIKE_DATA für JS: pro Hike elev-Profil, slope-Zeiten, GPS-Track
+        hike_js_data = []
         for d in all_with_metrics:
+            hike_js_data.append({
+                "name":            d.get("name") or d.get("date", ""),
+                "date":            d.get("date", ""),
+                "dist_km_profile": d.get("dist_km_profile", []),
+                "elev_profile":    d.get("elev_profile", []),
+                "slope_times":     d.get("slope_times", {}),
+                "gps_track":       d.get("gps_track", []),
+            })
+        hike_data_json = json.dumps(hike_js_data, ensure_ascii=False)
+
+        # Tabellenzeilen mit onclick und data-index
+        tbl_rows_html = ""
+        for idx, d in enumerate(all_with_metrics):
             dur_h   = (d.get("duration") or 0) // 3600
             dur_m   = ((d.get("duration") or 0) % 3600) // 60
             dur_str = f"{dur_h}:{dur_m:02d} h"
             tbl_rows_html += (
-                f"<tr data-date=\"{d.get('date', '')}\">"
+                f"<tr id=\"hikeRow{idx}\" data-date=\"{d.get('date', '')}\" "
+                f"data-idx=\"{idx}\" onclick=\"selectHike({idx})\" "
+                f"style='cursor:pointer;transition:background 0.15s;'>"
                 f"<td style='padding:9px 14px;border-bottom:1px solid #1c2128'>{d.get('name') or '–'}</td>"
                 f"<td style='padding:9px 14px;border-bottom:1px solid #1c2128'>{d.get('date', '–')}</td>"
                 f"<td style='padding:9px 14px;border-bottom:1px solid #1c2128'>{dur_str}</td>"
@@ -703,7 +651,8 @@ def plot_hike_analytics(hike_summary, weather_forecast=None):
                 f"<td style='padding:9px 14px;border-bottom:1px solid #1c2128;color:#f1c40f'>{d.get('hrtss') or '–'}</td>"
                 f"</tr>"
             )
-        tbl_html = """
+
+        tbl_html = f"""
 <hr>
 <div style="display:flex;align-items:center;gap:16px;margin:24px 0 12px;">
   <h2 style="margin:0;">Touren – Kennzahlen</h2>
@@ -733,24 +682,117 @@ def plot_hike_analytics(hike_summary, weather_forecast=None):
     </tr>
   </thead>
   <tbody>
-""" + tbl_rows_html + """  </tbody>
+{tbl_rows_html}  </tbody>
 </table>
 </div>
+
+<!-- Detail-Panel: klappt unterhalb der angeklickten Zeile auf -->
+<div id="hikeDetailPanel" style="display:none;background:#1c2128;border:1px solid #2d333b;
+     border-radius:12px;padding:20px 24px;margin:12px 0 24px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+    <span id="hikeDetailTitle" style="font-weight:600;font-size:15px;color:#e6e6e6;"></span>
+    <button onclick="closeHikeDetail()"
+      style="background:none;border:none;color:#6e7a8a;cursor:pointer;font-size:20px;
+             line-height:1;padding:0 4px;">&times;</button>
+  </div>
+  <div id="hikeElevChart" style="height:220px;"></div>
+  <div id="hikeSlopeChart" style="height:180px;margin-top:8px;"></div>
+</div>
+
 <script>
-function filterHikeTable(days) {
+const HIKE_DATA = {hike_data_json};
+let _selectedHike = null;
+
+function filterHikeTable(days) {{
     const rows = document.querySelectorAll('#hikeTbl tbody tr');
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - parseInt(days));
     let visible = 0;
-    rows.forEach(row => {
+    rows.forEach(row => {{
         const d = new Date(row.dataset.date);
-        const show = isNaN(cutoff) || days >= 9999 || d >= cutoff;
+        const show = days >= 9999 || d >= cutoff;
         row.style.display = show ? '' : 'none';
         if (show) visible++;
-    });
+    }});
     const el = document.getElementById('hikeTblCount');
     if (el) el.textContent = visible + ' Tour' + (visible !== 1 ? 'en' : '');
-}
+}}
+
+function selectHike(idx) {{
+    // Toggle: nochmal klicken → schließen
+    if (_selectedHike === idx) {{ closeHikeDetail(); return; }}
+    _selectedHike = idx;
+
+    // Zeilen-Highlight
+    document.querySelectorAll('#hikeTbl tbody tr').forEach(r => {{
+        r.style.background = parseInt(r.dataset.idx) === idx ? '#1e3a4f' : '';
+    }});
+
+    const h = HIKE_DATA[idx];
+    if (!h) return;
+
+    // Detail-Panel einblenden
+    const panel = document.getElementById('hikeDetailPanel');
+    panel.style.display = 'block';
+    document.getElementById('hikeDetailTitle').textContent = h.name + '  ·  ' + h.date;
+
+    // Höhenprofil
+    Plotly.react('hikeElevChart', [{{
+        x: h.dist_km_profile, y: h.elev_profile,
+        type: 'scatter', mode: 'lines',
+        fill: 'tozeroy', fillcolor: 'rgba(52,152,219,0.18)',
+        line: {{color: '#3498db', width: 2}},
+        hovertemplate: '%{{x:.2f}} km · %{{y:.0f}} m<extra></extra>',
+    }}], {{
+        paper_bgcolor: '#1c2128', plot_bgcolor: '#1c2128',
+        font: {{color: '#e6e6e6', size: 11}},
+        margin: {{t: 10, b: 36, l: 52, r: 10}},
+        height: 220,
+        xaxis: {{title: 'Distanz (km)', gridcolor: '#2d333b', zeroline: false}},
+        yaxis: {{title: 'Höhe (m)',     gridcolor: '#2d333b', zeroline: false}},
+    }}, {{displayModeBar: false, responsive: true}});
+
+    // Hangneigungsverteilung (Balken je Zone)
+    const st = h.slope_times || {{}};
+    Plotly.react('hikeSlopeChart', [{{
+        x: ['Flach\\n<5 %', 'Moderat\\n5–15 %', 'Steil\\n15–30 %', 'Extrem\\n>30 %'],
+        y: [
+            (st.flat     || 0) / 60,
+            (st.moderate || 0) / 60,
+            (st.steep    || 0) / 60,
+            (st.extreme  || 0) / 60,
+        ],
+        type: 'bar',
+        marker: {{color: ['#2ecc71','#f1c40f','#e67e22','#e74c3c']}},
+        hovertemplate: '%{{y:.0f}} min<extra></extra>',
+    }}], {{
+        paper_bgcolor: '#1c2128', plot_bgcolor: '#1c2128',
+        font: {{color: '#e6e6e6', size: 11}},
+        margin: {{t: 10, b: 48, l: 52, r: 10}},
+        height: 180,
+        xaxis: {{gridcolor: '#2d333b', zeroline: false}},
+        yaxis: {{title: 'min', gridcolor: '#2d333b', zeroline: false}},
+        showlegend: false,
+    }}, {{displayModeBar: false, responsive: true}});
+
+    // GPS-Track in Heatmap blau markieren
+    const iframe = document.getElementById('hikeMapIframe');
+    if (iframe && iframe.contentWindow && h.gps_track && h.gps_track.length) {{
+        iframe.contentWindow.postMessage(
+            {{type: 'highlightTrack', latlngs: h.gps_track}}, '*'
+        );
+    }}
+}}
+
+function closeHikeDetail() {{
+    _selectedHike = null;
+    document.getElementById('hikeDetailPanel').style.display = 'none';
+    document.querySelectorAll('#hikeTbl tbody tr').forEach(r => r.style.background = '');
+    const iframe = document.getElementById('hikeMapIframe');
+    if (iframe && iframe.contentWindow)
+        iframe.contentWindow.postMessage({{type: 'highlightTrack', latlngs: []}}, '*');
+}}
+
 filterHikeTable(9999);
 </script>"""
 
@@ -758,10 +800,6 @@ filterHikeTable(9999);
             "<hr>\n"
             "<h2>Analyse Wanderungen</h2>\n"
             + tbl_html
-            + "\n"
-            + elev_html
-            + "\n"
-            + slope_html
         )
 
     return header_html, charts_html, weather_warn_html
@@ -1735,7 +1773,7 @@ def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None,
     print(f"Formkurve gespeichert unter {FORMKURVE_PATH}")
 
 
-def generate_heatmap(activities, sport_types=None):
+def generate_heatmap(activities, sport_types=None, iframe_id=None):
     """Heatmap für beliebige Sportarten mit zwei umschaltbaren Layern:
     - Häufigkeit: grün (1×) → rot (am häufigsten)
     - Geschwindigkeit: blau (langsam) → rot (schnell), berechnet aus GPS+Zeit"""
@@ -1897,8 +1935,39 @@ def generate_heatmap(activities, sport_types=None):
     # Embed-Snippet für formkurve.html: vollständiges HTML als srcdoc-iframe
     import html as _html
     full_html = m.get_root().render()
+
+    # Für Wander-Heatmap: postMessage-Listener für GPS-Track-Highlight einbauen
+    if iframe_id:
+        listener = (
+            "<script>"
+            "(function(){"
+            "var hl=null;"
+            "function setup(){"
+            "var map=null;"
+            "for(var k in window){"
+            "try{if(window[k]&&typeof window[k].fitBounds==='function'"
+            "&&typeof window[k].addLayer==='function'){map=window[k];break;}"
+            "}catch(e){}"
+            "}"
+            "if(!map){setTimeout(setup,100);return;}"
+            "window.addEventListener('message',function(ev){"
+            "if(!ev.data||ev.data.type!=='highlightTrack')return;"
+            "if(hl){map.removeLayer(hl);hl=null;}"
+            "var ll=ev.data.latlngs;"
+            "if(!ll||!ll.length)return;"
+            "hl=L.polyline(ll,{color:'#3498db',weight:5,opacity:0.9}).addTo(map);"
+            "map.fitBounds(hl.getBounds(),{padding:[40,40]});"
+            "});"
+            "}"
+            "document.addEventListener('DOMContentLoaded',setup);"
+            "})();"
+            "</script>"
+        )
+        full_html = full_html.replace("</body>", listener + "</body>")
+
+    id_attr = f'id="{iframe_id}" ' if iframe_id else ''
     return (
-        f'<iframe srcdoc="{_html.escape(full_html)}" '
+        f'<iframe {id_attr}srcdoc="{_html.escape(full_html)}" '
         f'style="width:100%;height:540px;border:none;border-radius:12px;" '
         f'loading="lazy"></iframe>'
     )
@@ -1923,7 +1992,8 @@ def main():
 
     weather_forecast = fetch_weather_forecast()
     heatmap_embed = generate_heatmap(activities, sport_types={"Ride"})
-    hike_heatmap_embed = generate_heatmap(activities, sport_types={"Hike"})
+    hike_heatmap_embed = generate_heatmap(activities, sport_types={"Hike"},
+                                          iframe_id="hikeMapIframe")
 
     hike_summary = compute_hike_summary(activities)
     if hike_summary:
