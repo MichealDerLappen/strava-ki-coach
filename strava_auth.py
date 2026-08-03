@@ -2003,6 +2003,22 @@ def main():
     upload_file(FORMKURVE_PATH, "formkurve.html", mimetype="text/html")
     upload_file(HEATMAP_PATH, "heatmap.html", mimetype="text/html")
 
+    # formkurve.html auf GitHub Pages pushen
+    import subprocess
+    try:
+        subprocess.run(["git", "add", "formkurve.html"], cwd=BASE_DIR, check=True)
+        result = subprocess.run(
+            ["git", "commit", "-m", "Auto-update formkurve.html"],
+            cwd=BASE_DIR, capture_output=True
+        )
+        if result.returncode == 0:
+            subprocess.run(["git", "push"], cwd=BASE_DIR, check=True)
+            print("formkurve.html auf GitHub Pages gepusht.")
+        else:
+            print("Keine Änderungen in formkurve.html – kein Push nötig.")
+    except Exception as e:
+        print(f"GitHub Pages Push fehlgeschlagen: {e}")
+
 
 if __name__ == "__main__":
     main()
