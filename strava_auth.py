@@ -1905,9 +1905,9 @@ def generate_heatmap(activities, sport_types=None, iframe_id=None):
 
     folium.LayerControl(collapsed=False, position="topright").add_to(m)
 
-    # Legende
+    # Legende – auf Mobile per id ausblendbar
     legend_html = f"""
-    <div style="position:fixed;bottom:30px;left:30px;z-index:1000;
+    <div id="heatmapLegend" style="position:fixed;bottom:30px;left:30px;z-index:1000;
                 background:#1c2128;border:1px solid #2d333b;border-radius:10px;
                 padding:14px 20px;font-family:sans-serif;font-size:13px;color:#e6e6e6;
                 line-height:1.8;">
@@ -1920,6 +1920,19 @@ def generate_heatmap(activities, sport_types=None, iframe_id=None):
         <span style="font-size:11px;color:#6e7a8a;">{speed_note}</span>
     </div>"""
     m.get_root().html.add_child(folium.Element(legend_html))
+
+    # Externe Legende für Mobile (außerhalb des Iframes)
+    external_legend = (
+        f'<div class="heatmap-mobile-legend">'
+        f'<span><b>Häufigkeit</b> &nbsp;'
+        f'<span style="color:#2ecc71;">■</span> 1× &nbsp;'
+        f'<span style="color:#f1c40f;">■</span> mittel &nbsp;'
+        f'<span style="color:#e74c3c;">■</span> oft</span>'
+        f'<span><b>Geschwindigkeit</b> &nbsp;'
+        f'<span style="color:#3498db;">■</span> langsam &nbsp;'
+        f'<span style="color:#e74c3c;">■</span> schnell</span>'
+        f'</div>'
+    )
 
     m.save(HEATMAP_PATH)
     print(f"Heatmap: {max_count} max. Rides/Zelle, "
@@ -1936,6 +1949,7 @@ def generate_heatmap(activities, sport_types=None, iframe_id=None):
         "<style>"
         "@media(max-width:768px){"
         ".leaflet-control-layers{display:none!important;}"
+        "#heatmapLegend{display:none!important;}"
         "}"
         "</style>"
     )
@@ -1992,7 +2006,7 @@ def generate_heatmap(activities, sport_types=None, iframe_id=None):
         f'style="width:100%;height:540px;border:none;border-radius:12px;" '
         f'loading="lazy"></iframe>'
     )
-    return mobile_btns + iframe_tag
+    return mobile_btns + external_legend + iframe_tag
 
 
 def main():

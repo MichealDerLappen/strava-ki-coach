@@ -446,10 +446,26 @@
         gap: 8px;
         margin-bottom: 8px;
     }
+    .heatmap-mobile-legend {
+        display: none;
+        flex-direction: column;
+        gap: 4px;
+        background: #1c2128;
+        border: 1px solid #2d333b;
+        border-radius: 10px;
+        padding: 10px 16px;
+        font-size: 13px;
+        color: #e6e6e6;
+        line-height: 1.8;
+        margin-bottom: 8px;
+    }
 
     /* ── Mobile-Overrides (strikt nur ≤ 768 px) ─────────────────────────── */
     @media (max-width: 768px) {
         .heatmap-mobile-ctrl {
+            display: flex !important;
+        }
+        .heatmap-mobile-legend {
             display: flex !important;
         }
 
