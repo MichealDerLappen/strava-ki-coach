@@ -452,7 +452,6 @@ def compute_hike_metrics(activity):
 
     gain = loss = 0.0
     cum_dist = 0.0
-    vam_vals = []
     slope_times = {"flat": 0, "moderate": 0, "steep": 0, "extreme": 0}
     dist_km_profile = [0.0]
     elev_profile = [elevs[0]]
@@ -472,14 +471,6 @@ def compute_hike_metrics(activity):
         elif de < -0.3:
             loss += abs(de)
 
-        # VAM: nur für Aufstiegssegmente
-        if de > 0.5 and gps_ts:
-            dt_h = (gps_ts[i] - gps_ts[i - 1]) / 3_600_000.0
-            if dt_h > 0:
-                vam = de / dt_h
-                if 50 < vam < 3000:
-                    vam_vals.append(vam)
-
         # Hangneigung für Slope-Zonen
         if dist_m > 1 and gps_ts:
             grade = abs(de / dist_m) * 100
@@ -495,7 +486,9 @@ def compute_hike_metrics(activity):
                     slope_times["extreme"] += dt_s
 
     moving_hours = (activity.get("moving_time") or 0) / 3600
-    vam_sorted = sorted(vam_vals)
+
+    # VAM = Gesamtaufstieg / Gesamtgehzeit (Standarddefinition)
+    vam = round(gain / moving_hours) if moving_hours > 0 and gain > 5 else 0
 
     # GPS-Track für Karten-Highlight: max. 300 Punkte
     step = max(1, n // 300) if n > 300 else 1
@@ -506,8 +499,7 @@ def compute_hike_metrics(activity):
         "elev_gain":        round(gain),
         "elev_loss":        round(loss),
         "downhill_stress":  round(loss * moving_hours),
-        "vam_best":         round(max(vam_vals)) if vam_vals else 0,
-        "vam_median":       round(vam_sorted[len(vam_sorted)//2]) if vam_vals else 0,
+        "vam_median":       vam,
         "slope_times":      slope_times,
         "dist_km":          round(cum_dist / 1000, 1),
         "dist_km_profile":  dist_km_profile,
