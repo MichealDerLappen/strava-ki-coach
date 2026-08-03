@@ -8,3 +8,4 @@ google-auth==2.40.2
 google-auth-oauthlib==1.2.2
 google-api-python-client==2.176.0
 plotly==6.8.0
+folium==0.20.0

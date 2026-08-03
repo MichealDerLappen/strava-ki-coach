@@ -34,9 +34,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 ENV_PATH = os.path.join(BASE_DIR, ".env")
 ACTIVITIES_PATH = os.path.join(BASE_DIR, "activities.json")
-FORMKURVE_PATH = os.path.join(BASE_DIR, "formkurve.html")
-STREAMS_DIR = os.path.join(BASE_DIR, "streams")
-DRIVE_FILENAME = "activities.json"
+FORMKURVE_PATH  = os.path.join(BASE_DIR, "formkurve.html")
+HEATMAP_PATH    = os.path.join(BASE_DIR, "heatmap.html")
+STREAMS_DIR     = os.path.join(BASE_DIR, "streams")
+DRIVE_FILENAME  = "activities.json"
 
 # Open-Meteo: Koordinaten fuer die Wettervorhersage (Linz)
 WEATHER_LATITUDE = 48.3064
@@ -953,7 +954,7 @@ def plot_intensity_distribution(activities):
     )
 
 
-def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None):
+def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None, heatmap_embed=None):
     """Erstellt ein interaktives Dashboard der Formkurve (CTL, ATL, TSB)
     inkl. Coach-Analyse als 'formkurve.html'."""
 
@@ -1179,6 +1180,18 @@ def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None):
 
     ftp_est = (mmp_data.get("ftp_42") or mmp_data.get("ftp_season")) if mmp_data else None
 
+    if heatmap_embed:
+        heatmap_section = (
+            "    <hr>\n"
+            "    <h2>Heatmap aller Rides</h2>\n"
+            "    <p class=\"status-text\" style=\"font-size:12px;color:#6e7a8a;\">"
+            "Layer-Umschalter oben rechts in der Karte: Häufigkeit / Geschwindigkeit."
+            "</p>\n"
+            + "    " + heatmap_embed
+        )
+    else:
+        heatmap_section = ""
+
     mmp_chart = plot_mmp(mmp_data)
     if mmp_chart:
         mmp_section = (
@@ -1298,6 +1311,8 @@ def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None):
     <script>
 {dashboard_js}
     </script>
+
+{heatmap_section}
 </body>
 </html>
 """
@@ -1305,6 +1320,164 @@ def plot_formkurve(history, activities, weather_forecast=None, mmp_data=None):
     with open(FORMKURVE_PATH, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"Formkurve gespeichert unter {FORMKURVE_PATH}")
+
+
+def generate_heatmap(activities):
+    """Heatmap aller Rides mit zwei umschaltbaren Layern:
+    - Häufigkeit: grün (1×) → rot (am häufigsten)
+    - Geschwindigkeit: blau (langsam) → rot (schnell), berechnet aus GPS+Zeit"""
+    import math
+    import folium
+    from folium.plugins import HeatMap
+
+    ride_ids = {a["id"] for a in activities if a.get("type") == "Ride"}
+    GRID = 4  # 4 Dezimalstellen ≈ ~11m Rasterzellen
+
+    def haversine_m(lat1, lon1, lat2, lon2):
+        R = 6_371_000.0
+        p1, p2 = math.radians(lat1), math.radians(lat2)
+        dp = math.radians(lat2 - lat1)
+        dl = math.radians(lon2 - lon1)
+        a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+        return 2 * R * math.asin(math.sqrt(a))
+
+    cell_rides: dict[tuple, int] = {}          # cell → unique ride count
+    cell_speeds: dict[tuple, list] = {}         # cell → list of speed samples (km/h)
+    all_lats, all_lons = [], []
+
+    for fname in sorted(os.listdir(STREAMS_DIR)):
+        if not fname.endswith(".json"):
+            continue
+        aid = int(fname.replace(".json", ""))
+        if aid not in ride_ids:
+            continue
+        try:
+            stream = json.load(open(os.path.join(STREAMS_DIR, fname), encoding="utf-8"))
+        except Exception:
+            continue
+
+        lats = stream.get("latitudes", [])
+        lons = stream.get("longitudes", [])
+        ts   = stream.get("gps_timestamps_ms", [])
+        if not lats or not lons:
+            continue
+
+        all_lats.extend(lats)
+        all_lons.extend(lons)
+
+        # Häufigkeits-Layer: jede Zelle einmal pro Ride
+        visited = set()
+        for lat, lon in zip(lats, lons):
+            cell = (round(lat, GRID), round(lon, GRID))
+            visited.add(cell)
+        for cell in visited:
+            cell_rides[cell] = cell_rides.get(cell, 0) + 1
+
+        # Geschwindigkeits-Layer: aus aufeinanderfolgenden Punkten berechnen
+        if ts and len(ts) == len(lats):
+            for i in range(1, len(lats)):
+                dt_s = (ts[i] - ts[i - 1]) / 1000.0
+                if not (0.5 < dt_s < 30):
+                    continue
+                dist_m = haversine_m(lats[i-1], lons[i-1], lats[i], lons[i])
+                speed_kmh = (dist_m / 1000.0) / (dt_s / 3600.0)
+                if not (3.0 < speed_kmh < 80.0):  # Rauschen und Stopps filtern
+                    continue
+                cell = (round(lats[i], GRID), round(lons[i], GRID))
+                if cell not in cell_speeds:
+                    cell_speeds[cell] = []
+                cell_speeds[cell].append(speed_kmh)
+
+    if not cell_rides:
+        print("Keine GPS-Daten für Heatmap.")
+        return
+
+    center_lat = sum(all_lats) / len(all_lats)
+    center_lon = sum(all_lons) / len(all_lons)
+
+    # Gewichtete HeatMap-Daten
+    max_count = max(cell_rides.values())
+    freq_data = [
+        [lat, lon, count / max_count]
+        for (lat, lon), count in cell_rides.items()
+    ]
+
+    speed_data = []
+    if cell_speeds:
+        avg_speeds = {cell: sum(v) / len(v) for cell, v in cell_speeds.items()}
+        p10 = sorted(avg_speeds.values())[int(len(avg_speeds) * 0.10)]
+        p90 = sorted(avg_speeds.values())[int(len(avg_speeds) * 0.90)]
+        spread = max(p90 - p10, 1.0)
+        for (lat, lon), spd in avg_speeds.items():
+            w = max(0.0, min(1.0, (spd - p10) / spread))
+            speed_data.append([lat, lon, w])
+
+    # Karte
+    m = folium.Map(
+        location=[center_lat, center_lon],
+        zoom_start=12,
+        tiles="CartoDB dark_matter",
+        prefer_canvas=True,
+    )
+
+    # Layer 1 – Häufigkeit
+    freq_group = folium.FeatureGroup(name="Häufigkeit", show=True)
+    HeatMap(
+        freq_data,
+        min_opacity=0.3,
+        radius=10,
+        blur=8,
+        gradient={0.0: "#2ecc71", 0.4: "#f1c40f", 0.7: "#e67e22", 1.0: "#e74c3c"},
+    ).add_to(freq_group)
+    freq_group.add_to(m)
+
+    # Layer 2 – Geschwindigkeit
+    if speed_data:
+        speed_group = folium.FeatureGroup(name="Geschwindigkeit", show=False)
+        HeatMap(
+            speed_data,
+            min_opacity=0.3,
+            radius=10,
+            blur=8,
+            gradient={0.0: "#3498db", 0.35: "#2ecc71", 0.65: "#f1c40f", 1.0: "#e74c3c"},
+        ).add_to(speed_group)
+        speed_group.add_to(m)
+
+        avg_all = sum(s for _, _, s in speed_data) / len(speed_data)
+        speed_note = f"Ø ~{p10:.0f}–{p90:.0f} km/h (10.–90. Perzentile)"
+    else:
+        speed_note = "Keine Geschwindigkeitsdaten"
+
+    folium.LayerControl(collapsed=False, position="topright").add_to(m)
+
+    # Legende
+    legend_html = f"""
+    <div style="position:fixed;bottom:30px;left:30px;z-index:1000;
+                background:#1c2128;border:1px solid #2d333b;border-radius:10px;
+                padding:14px 20px;font-family:sans-serif;font-size:13px;color:#e6e6e6;
+                line-height:1.8;">
+        <b>Häufigkeit</b><br>
+        <span style="color:#2ecc71;">■</span> 1× gefahren &nbsp;
+        <span style="color:#e74c3c;">■</span> am häufigsten<br><br>
+        <b>Geschwindigkeit</b><br>
+        <span style="color:#3498db;">■</span> langsam &nbsp;
+        <span style="color:#e74c3c;">■</span> schnell<br>
+        <span style="font-size:11px;color:#6e7a8a;">{speed_note}</span>
+    </div>"""
+    m.get_root().html.add_child(folium.Element(legend_html))
+
+    m.save(HEATMAP_PATH)
+    print(f"Heatmap: {max_count} max. Rides/Zelle, "
+          f"{len(cell_rides)} Zellen, {len(speed_data)} mit Speed-Daten")
+
+    # Embed-Snippet für formkurve.html: vollständiges HTML als srcdoc-iframe
+    import html as _html
+    full_html = m.get_root().render()
+    return (
+        f'<iframe srcdoc="{_html.escape(full_html)}" '
+        f'style="width:100%;height:540px;border:none;border-radius:12px;" '
+        f'loading="lazy"></iframe>'
+    )
 
 
 def main():
@@ -1325,10 +1498,13 @@ def main():
               f"{mmp_data['count_season']} gesamt – FTP-Schaetzung: {ftp_est} W")
 
     weather_forecast = fetch_weather_forecast()
-    plot_formkurve(history, activities, weather_forecast, mmp_data=mmp_data)
+    heatmap_embed = generate_heatmap(activities)
+    plot_formkurve(history, activities, weather_forecast, mmp_data=mmp_data,
+                   heatmap_embed=heatmap_embed)
 
     upload_file(ACTIVITIES_PATH, DRIVE_FILENAME)
     upload_file(FORMKURVE_PATH, "formkurve.html", mimetype="text/html")
+    upload_file(HEATMAP_PATH, "heatmap.html", mimetype="text/html")
 
 
 if __name__ == "__main__":

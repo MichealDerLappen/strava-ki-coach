@@ -124,6 +124,12 @@ Datei für Google Drive). Enthalten sind:
   der Woche (gewichtet nach Temp/Regen/Wind) und motivierendem TSB-Tipp.
 - **Wochentags-Filter**: Mo–So-Buttons zum Ein-/Ausblenden einzelner
   Tages-Karten (ausgeblendete Werte fließen weiterhin in die Simulation ein).
+- **Heatmap aller Rides**: Interaktive Leaflet-Karte ganz unten im Dashboard
+  (Dark-Theme, verschiebbar, zoombar). Layer-Umschalter oben rechts:
+  – *Häufigkeit*: grün (1× gefahren) → rot (am häufigsten)
+  – *Geschwindigkeit*: blau (langsam) → rot (schnell), berechnet aus GPS+Zeit
+  Beide Layer gleichzeitig einschaltbar. Auch als eigenständige `heatmap.html`
+  auf Google Drive verfügbar.
 - **Intensitätsverteilung (Polarisierung)**: Sekundengenaue Zonenverteilung
   (Z1 locker / Z2 mittel / Z3 hart) auf Basis der HR-Zeitreihe aus den Stream-
   Caches. Zwei Ansichten: Gesamtverteilung (horizontaler Stacked-Bar) und
