@@ -1930,40 +1930,69 @@ def generate_heatmap(activities, sport_types=None, iframe_id=None):
     full_html = m.get_root().render()
 
     # Für Wander-Heatmap: postMessage-Listener für GPS-Track-Highlight einbauen
-    if iframe_id:
-        listener = (
-            "<script>"
-            "(function(){"
-            "var hl=null;"
-            "function setup(){"
-            "var map=null;"
-            "for(var k in window){"
-            "try{if(window[k]&&typeof window[k].fitBounds==='function'"
-            "&&typeof window[k].addLayer==='function'){map=window[k];break;}"
-            "}catch(e){}"
-            "}"
-            "if(!map){setTimeout(setup,100);return;}"
-            "window.addEventListener('message',function(ev){"
-            "if(!ev.data||ev.data.type!=='highlightTrack')return;"
-            "if(hl){map.removeLayer(hl);hl=null;}"
-            "var ll=ev.data.latlngs;"
-            "if(!ll||!ll.length)return;"
-            "hl=L.polyline(ll,{color:'#3498db',weight:5,opacity:0.9}).addTo(map);"
-            "map.fitBounds(hl.getBounds(),{padding:[40,40]});"
-            "});"
-            "}"
-            "document.addEventListener('DOMContentLoaded',setup);"
-            "})();"
-            "</script>"
-        )
-        full_html = full_html.replace("</body>", listener + "</body>")
+    # Immer injizieren: Layer-Toggle per postMessage + auf Mobile nativen
+    # Leaflet-Schalter ausblenden (er liegt sonst über der Karte)
+    mobile_css = (
+        "<style>"
+        "@media(max-width:768px){"
+        ".leaflet-control-layers{display:none!important;}"
+        "}"
+        "</style>"
+    )
+    full_html = full_html.replace("</head>", mobile_css + "</head>")
+
+    inject_script = (
+        "<script>"
+        "(function(){"
+        "var hl=null;"
+        "function setup(){"
+        "var map=null,ctrl=null;"
+        "for(var k in window){"
+        "try{"
+        "var v=window[k];"
+        "if(v&&typeof v.fitBounds==='function'&&typeof v.addLayer==='function')map=v;"
+        "if(v&&v._layers&&typeof v.addOverlay==='function')ctrl=v;"
+        "}catch(e){}"
+        "}"
+        "if(!map){setTimeout(setup,100);return;}"
+        "window.addEventListener('message',function(ev){"
+        "if(!ev.data)return;"
+        "if(ev.data.type==='highlightTrack'){"
+        "if(hl){map.removeLayer(hl);hl=null;}"
+        "var ll=ev.data.latlngs;"
+        "if(ll&&ll.length){hl=L.polyline(ll,{color:'#3498db',weight:5,opacity:0.9}).addTo(map);map.fitBounds(hl.getBounds(),{padding:[40,40]});}"
+        "}"
+        "if(ev.data.type==='setLayerVisible'&&ctrl){"
+        "ctrl._layers.forEach(function(o){"
+        "if(o.name===ev.data.name){if(ev.data.visible)map.addLayer(o.layer);else map.removeLayer(o.layer);}"
+        "});"
+        "}"
+        "});"
+        "}"
+        "document.addEventListener('DOMContentLoaded',setup);"
+        "})();"
+        "</script>"
+    )
+    full_html = full_html.replace("</body>", inject_script + "</body>")
+
+    # Mobile-Buttons außerhalb des Iframes (nur auf ≤768px sichtbar via CSS)
+    fid = iframe_id or ("rideMapIframe" if {"Ride"} == sport_types else "hikeMapIframe2")
+    mobile_btns = (
+        f'<div class="heatmap-mobile-ctrl" id="{fid}_ctrl">'
+        f'<button class="filter-btn active" '
+        f'onclick="toggleHeatLayer(\'{fid}\',\'Häufigkeit\',this)">Häufigkeit</button>'
+        f'<button class="filter-btn" '
+        f'onclick="toggleHeatLayer(\'{fid}\',\'Geschwindigkeit\',this)">Geschwindigkeit</button>'
+        f'</div>'
+    )
 
     id_attr = f'id="{iframe_id}" ' if iframe_id else ''
-    return (
+    iframe_tag = (
         f'<iframe {id_attr}srcdoc="{_html.escape(full_html)}" '
         f'style="width:100%;height:540px;border:none;border-radius:12px;" '
         f'loading="lazy"></iframe>'
     )
+    return mobile_btns + iframe_tag
 
 
 def main():
@@ -1984,7 +2013,8 @@ def main():
               f"{mmp_data['count_season']} gesamt – FTP-Schaetzung: {ftp_est} W")
 
     weather_forecast = fetch_weather_forecast()
-    heatmap_embed = generate_heatmap(activities, sport_types={"Ride"})
+    heatmap_embed = generate_heatmap(activities, sport_types={"Ride"},
+                                     iframe_id="rideMapIframe")
     hike_heatmap_embed = generate_heatmap(activities, sport_types={"Hike"},
                                           iframe_id="hikeMapIframe")
 

@@ -257,3 +257,11 @@
         simulate();
 
         simulate();
+
+        function toggleHeatLayer(iframeId, name, btn) {
+            btn.classList.toggle('active');
+            const visible = btn.classList.contains('active');
+            const iframe = document.getElementById(iframeId);
+            if (iframe && iframe.contentWindow)
+                iframe.contentWindow.postMessage({type: 'setLayerVisible', name: name, visible: visible}, '*');
+        }
